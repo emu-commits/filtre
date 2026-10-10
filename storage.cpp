@@ -76,7 +76,7 @@ struct __attribute__((packed)) SavePattern {
     uint8_t  length;
 };
 struct __attribute__((packed)) SaveDeck {
-    char     name[SAMPLE_NAME_LEN];        // file in /groovebox/loops, empty = none
+    char     name[LOOP_NAME_LEN];          // file in /groovebox/loops, empty = none
     uint8_t  mode, sliceMode, nSlices, fitBars, qual, startTenths, mute, reserved;
     float    pitch, level;
     uint32_t in, out;
@@ -140,7 +140,7 @@ bool storageSaveProject(uint8_t slot) {
     for (int d = 0; d < NUM_DECKS; d++) {
         const Deck& k = g_decks[d];
         SaveDeck& o = pf->decks[d];
-        if (deckLoaded(d)) strncpy(o.name, k.name, SAMPLE_NAME_LEN - 1);
+        if (deckLoaded(d)) strncpy(o.name, k.name, LOOP_NAME_LEN - 1);
         o.mode = k.mode; o.sliceMode = k.sliceMode; o.nSlices = k.nSlices; o.fitBars = k.fitBars;
         o.qual = k.qual; o.startTenths = k.startTenths; o.mute = k.mute;
         o.pitch = k.pitch; o.level = k.level; o.in = k.in; o.out = k.out;
@@ -228,8 +228,8 @@ static void applyDeck(int d, const SaveDeck& o) {
     k.startTenths = o.startTenths;
     k.mute = o.mute; k.pitch = o.pitch; k.level = o.level;
     if (!o.name[0]) return;
-    char name[SAMPLE_NAME_LEN];
-    memcpy(name, o.name, SAMPLE_NAME_LEN); name[SAMPLE_NAME_LEN - 1] = 0;
+    char name[LOOP_NAME_LEN];
+    memcpy(name, o.name, LOOP_NAME_LEN); name[LOOP_NAME_LEN - 1] = 0;
     if (!deckLoad(d, name)) return;                 // file gone: deck stays empty
     // the saved chop only makes sense on the same audio
     uint32_t len = g_samples[k.slot].length;

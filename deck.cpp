@@ -178,8 +178,8 @@ uint8_t deckGuessBars(uint8_t d, uint16_t bpm, bool force) {
 
 static void adopt(uint8_t d, int slot, const char* name) {
     Deck& k = g_decks[d];
-    strncpy(k.name, name, SAMPLE_NAME_LEN - 1);
-    k.name[SAMPLE_NAME_LEN - 1] = 0;
+    strncpy(k.name, name, LOOP_NAME_LEN - 1);
+    k.name[LOOP_NAME_LEN - 1] = 0;
     k.in = 0; k.out = g_samples[slot].length - 1;
     k.slot = (int8_t)slot;
     g_samples[slot].owner = (d == 0) ? OWN_DECK_A : OWN_DECK_B;
@@ -203,7 +203,7 @@ bool deckLoad(uint8_t d, const char* filename) {
     if (d >= NUM_DECKS) return false;
     Deck& k = g_decks[d];
     deckUnload(d);                                     // free first: the new take may need the room
-    char path[96];
+    char path[DIR_LOOPS_LEN + LOOP_NAME_LEN + 2];
     snprintf(path, sizeof(path), "%s/%s", DIR_LOOPS, filename);
     bool cut = false;
     int slot = samplerLoadDeck(path, filename, d == 0 ? OWN_DECK_A : OWN_DECK_B,

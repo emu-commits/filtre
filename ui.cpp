@@ -25,7 +25,7 @@ uint8_t g_helpScroll = 0;
 float   g_holdProg   = 0.0f;
 char    g_holdLabel[16] = "";
 
-char    g_fileList[BROWSER_MAX][SAMPLE_NAME_LEN];
+char    g_fileList[BROWSER_MAX][LOOP_NAME_LEN];
 uint8_t g_fileCount = 0;
 uint8_t g_fileSel   = 0;
 
@@ -81,9 +81,11 @@ void uiScanSampleDir() {
         String nm = f.name();
         int slash = nm.lastIndexOf('/');            // some core versions return full path
         if (slash >= 0) nm = nm.substring(slash + 1);
-        if (!f.isDirectory() && !nm.startsWith(".") && (nm.endsWith(".wav") || nm.endsWith(".WAV"))) {
-            strncpy(g_fileList[g_fileCount], nm.c_str(), SAMPLE_NAME_LEN - 1);
-            g_fileList[g_fileCount][SAMPLE_NAME_LEN - 1] = 0;
+        // a name that does not fit could not be opened again, so it is not listed
+        if (!f.isDirectory() && !nm.startsWith(".") && (nm.endsWith(".wav") || nm.endsWith(".WAV")) &&
+            strlen(nm.c_str()) < LOOP_NAME_LEN) {
+            strncpy(g_fileList[g_fileCount], nm.c_str(), LOOP_NAME_LEN - 1);
+            g_fileList[g_fileCount][LOOP_NAME_LEN - 1] = 0;
             g_fileCount++;
         }
         f.close();
@@ -150,6 +152,45 @@ void uiDeckRowValue(uint8_t di, uint8_t row, char* o, size_t n) {
         case DR_SETBPM:   if (has) snprintf(o, n, "> %d", (int)(deckBpmForBars(di, k.fitBars ? k.fitBars : deckGuessBars(di, g_bpm, true)) + 0.5f));
                           else snprintf(o, n, "-"); break;
         default: o[0] = 0;
+    }
+}
+
+// synth and drum rows as text, for the lid's big readout
+void uiSoundRowText(uint8_t row, char* name, size_t nn, char* val, size_t vn) {
+    name[0] = val[0] = 0;
+    if (g_curTrack == TRK_DRUMS) {
+        static const char* names[] = {"LANE","ENGINE","TYPE","VOLUME","TUNE","DECAY","CHOKE"};
+        if (row >= 7) return;
+        const DrumLane& d = g_drumLanes[g_curDrumLane];
+        snprintf(name, nn, "%s", names[row]);
+        switch (row) {
+            case 0: snprintf(val, vn, "%d", g_curDrumLane + 1); break;
+            case 1: snprintf(val, vn, "%s", engNames[d.engine]); break;
+            case 2: if (d.engine == ENG_SMPL) snprintf(val, vn, "%.17s", samplerValid(d.sampleSlot) ? g_samples[d.sampleSlot].name : "(none)");
+                    else snprintf(val, vn, "%s", d.engine == ENG_909 ? type909[d.type % DT_COUNT] : type808[d.type % DT_COUNT_808]);
+                    break;
+            case 3: snprintf(val, vn, "%d%%", (int)(d.volume * 100 + 0.5f)); break;
+            case 4: snprintf(val, vn, "%+.1f st", d.tune); break;
+            case 5: snprintf(val, vn, "%.2fx", d.decay); break;
+            case 6: if (d.chokeGroup) snprintf(val, vn, "GRP %u", d.chokeGroup); else snprintf(val, vn, "OFF"); break;
+        }
+    } else if (g_curTrack < NUM_SYNTHS) {
+        static const char* names[] = {"OSC","WTABLE","CUTOFF","RESO","ENV AMT","FLT DEC","AMP DEC","VOLUME","VOICES"};
+        if (row >= 9) return;
+        const SynthTrack& t = g_synths[g_curTrack];
+        const SynthVoice& v = t.v[0];
+        snprintf(name, nn, "%s", names[row]);
+        switch (row) {
+            case 0: snprintf(val, vn, "%s", oscNames[v.oscMode]); break;
+            case 1: snprintf(val, vn, "%s", g_wtNames[v.wtIndex]); break;
+            case 2: snprintf(val, vn, "%d%%", (int)(v.fltCutoff * 100 + 0.5f)); break;
+            case 3: snprintf(val, vn, "%d%%", (int)(v.fltReso * 100 + 0.5f)); break;
+            case 4: snprintf(val, vn, "%d%%", (int)(v.fltEnvAmt * 100 + 0.5f)); break;
+            case 5: snprintf(val, vn, "%d%%", (int)((v.filtDecRate - 0.995f) / 0.00495f * 100 + 0.5f)); break;
+            case 6: snprintf(val, vn, "%d%%", (int)((v.ampDecRate - 0.999f) / 0.00099f * 100 + 0.5f)); break;
+            case 7: snprintf(val, vn, "%d%%", (int)(v.volume * 100 + 0.5f)); break;
+            case 8: snprintf(val, vn, "%u %s", t.voices, t.voices > 1 ? "POLY" : "MONO"); break;
+        }
     }
 }
 
@@ -321,9 +362,12 @@ static void drawPatternPage() {
     for (int row = 0; row < NUM_DRUM_LANES; row++) {
         int l = NUM_DRUM_LANES - 1 - row;             // visual row -> lane
         bool sel = (g_curTrack == TRK_DRUMS && g_curDrumLane == l);
-        canvas.setTextColor(g_drumMute ? COL_GRID : (sel ? COL_TEXT : COL_DRUMS));
-        canvas.setCursor(2, y - 1);
-        canvas.printf("%d", l + 1);
+        // 7 px rows: number every other lane, and always the selected one
+        if (sel || (l % 2 == 0 && !(g_curTrack == TRK_DRUMS && abs((int)g_curDrumLane - l) == 1))) {
+            canvas.setTextColor(g_drumMute ? COL_GRID : (sel ? COL_TEXT : COL_DRUMS));
+            canvas.setCursor(2, y - 1);
+            canvas.printf("%d", l + 1);
+        }
 
         for (int i = 0; i < STEPS_PER_BAR; i++) {
             int st = base + i, x = gx + i * gw;
@@ -534,7 +578,7 @@ static void drawSamplePage() {
             printClipped(g_fileList[i], 31);
             if (s_listIsLoops) {
                 for (int d = 0; d < NUM_DECKS; d++)
-                    if (deckLoaded(d) && strncmp(g_decks[d].name, g_fileList[i], SAMPLE_NAME_LEN) == 0) {
+                    if (deckLoaded(d) && strncmp(g_decks[d].name, g_fileList[i], LOOP_NAME_LEN) == 0) {
                         canvas.setTextColor(trackCols[TRK_DECK_A + d]);
                         canvas.setCursor(216 + d * 12, y); canvas.print(d ? "B" : "A");
                     }
@@ -575,19 +619,21 @@ static void drawSongPage() {
             canvas.drawFastVLine(x, y, ch - 2, COL_ACCENT);
 
         if (sl.pattern != SONG_EMPTY) {
+            // pattern number, then how many times it plays (1-9, A-G = 10-16) in grey
             canvas.setTextColor(isPlay ? COL_TEXT : COL_SYNTH1);
-            canvas.setCursor(x + 4, y + 2);
+            canvas.setCursor(x + 1, y + 2);
             canvas.printf("%u", sl.pattern + 1);
-            // repeats: one tick each (a full row = 12 or more)
-            int reps = sl.repeats > 12 ? 12 : sl.repeats;
-            if (sl.repeats > 1) canvas.drawFastHLine(x + 1, y + 11, reps - 1 ? reps : 1, COL_DIM);
-            if (sl.repeats > 1) for (int r = 0; r < reps; r += 2) canvas.drawPixel(x + 1 + r, y + 11, COL_TEXT);
+            if (sl.repeats > 1) {
+                canvas.setTextColor(COL_DIM);
+                canvas.setCursor(x + 7, y + 2);
+                canvas.print(sliceChar[(sl.repeats - 1) & 15]);
+            }
             // filter target: amber column, taller = more open
             if (sl.target != TARGET_NONE) {
                 int h = 1 + sl.target * 5 / 254;
                 canvas.fillRect(x + 1, y + ch - 3 - h, cw - 3, h, COL_AMBER);
             }
-            if (sl.mute) canvas.drawFastHLine(x + 1, y + 13, cw - 3, COL_REC);
+            if (sl.mute) canvas.drawFastHLine(x + 1, y + 11, cw - 3, COL_REC);
         }
         if (isCursor) canvas.drawRect(x - 1, y - 1, cw + 1, ch, COL_CURSOR);
     }

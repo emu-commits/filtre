@@ -155,7 +155,7 @@ void filtreDefaults() {
     // T1: mono 303 bass, saw, low and short
     g_synths[0].setVoices(1);
     g_synths[0].forEach([](SynthVoice& v){ v.oscMode = OSC_SAW; v.fltCutoff = 0.22f; v.fltReso = 0.40f;
-                                           v.fltEnvAmt = 0.45f; v.ampDecRate = 0.99975f; v.volume = 0.85f; });
+                                           v.fltEnvAmt = 0.45f; v.ampDecRate = 0.99975f; v.volume = 0.70f; });
     // T2: 3-voice stab, short
     g_synths[1].setVoices(3);
     g_synths[1].forEach([](SynthVoice& v){ v.oscMode = OSC_SQR; v.fltCutoff = 0.45f; v.fltReso = 0.25f;
@@ -186,12 +186,12 @@ void loadDemoPattern() {
     for (int st = 0; st < STEPS_PER_BAR; st++) g_patterns[2].drums[st] |= (1 << L_CHAT);
 
     for (int i = 0; i < SONG_LENGTH; i++) songClearSlot(i);
-    g_song[0] = { 0, 2, SLOT_MUTE_KICK, 20 };    // filter shut, no kick
+    g_song[0] = { 0, 2, SLOT_MUTE_KICK, 50 };    // filter nearly shut, no kick (it still pumps)
     g_song[1] = { 1, 2, 0, 140 };                // kick + bass, opening
     g_song[2] = { 2, 2, 0, 254 };                // wide open
     g_song[3] = { 3, 1, SLOT_MUTE_T1, 51 };      // back down, loop to slot 2
     g_songLoopStart = 1;
-    g_fx.cutoff = 20;
+    g_fx.cutoff = 36;
     g_curPattern = 0;
     g_songMode = true;
     engineUnlock();

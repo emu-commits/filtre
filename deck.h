@@ -30,7 +30,7 @@ struct ChopVoice {
 struct Deck {
     // ----- settings (written by core 1) -----
     int8_t   slot;                       // arena slot, -1 = empty
-    char     name[SAMPLE_NAME_LEN];
+    char     name[LOOP_NAME_LEN];
     uint8_t  mode;                       // DeckMode
     uint8_t  sliceMode;                  // SliceMode
     uint8_t  nSlices;

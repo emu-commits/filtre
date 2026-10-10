@@ -12,3 +12,9 @@ Copy the `groovebox/` folder to the root of a FAT32 microSD card:
 
 The demo project uses only the built-in 808/909 engines, so it plays even
 without the sample pack. Also available as a one-click zip on the Releases page.
+
+## FILTRE additions
+
+`groovebox/loops/FILTRE-DEMO.wav` is the factory deck loop: two bars at 122 BPM,
+synthesised by `tools/make_factory_loop.py`. It is original audio, **CC0**, and
+not a recording of any existing record. Put your own WAV sections next to it.

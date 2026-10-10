@@ -291,6 +291,7 @@ bool wavDecodeToMono16(File& f, int16_t* dst, uint32_t maxFrames,
 
 // ---------- one-shots ----------
 int samplerLoad(const char* filename) {
+    if (strlen(filename) >= SAMPLE_NAME_LEN) return -1;     // lanes are saved by a 31-char name
     int existing = samplerFindByName(filename);
     if (existing >= 0) return existing;
     if (freeSlot() < 0 || !g_arena || g_tailHeld) return -1;

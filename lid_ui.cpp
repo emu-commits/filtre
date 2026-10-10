@@ -17,7 +17,9 @@ void lidToggle() {}
 #else
 
 #include <M5Cardputer.h>
+#ifdef ARDUINO
 #include <lgfx/v1/panel/Panel_ST7789.hpp>
+#endif
 #include "ui.h"
 #include "keymap.h"
 #include "sequencer.h"
@@ -38,6 +40,7 @@ void lidToggle() {}
 #define LW 320
 #define LH 240
 
+#ifdef ARDUINO
 class LidPanel : public lgfx::LGFX_Device {
     lgfx::Panel_ST7789 _panel;
     lgfx::Bus_SPI      _bus;
@@ -68,7 +71,19 @@ public:
     }
 };
 
+#else
+// host preview (tools/host): the lid is a plain 320x240 sprite
+class LidPanel : public lgfx::LGFX_Sprite {
+public:
+    bool init() { setColorDepth(16); return createSprite(LW, LH) != nullptr; }
+    void setRotation(int) {}
+};
+#endif
+
 static LidPanel lid;
+#ifndef ARDUINO
+lgfx::LGFX_Sprite* lidHostSprite() { return &lid; }
+#endif
 static bool     s_inited = false;
 
 // palette
@@ -77,6 +92,15 @@ static uint16_t C_BG, C_WAVE, C_WAVEB, C_HEAD, C_FILT, C_TICK, C_TEXT, C_DIM, C_
 void lidInit() {
 #ifdef FILTRE_LID_FORCE_FAIL
     g_lidOk = false; return;
+#endif
+#ifdef ARDUINO
+    // The lid's DC line is an input on the panel. If something on the header
+    // DRIVES GPIO 6 (the LoRa cap's BUSY output lives there), this is not a
+    // TERM512: stay off the pins rather than fight it.
+    pinMode(6, INPUT_PULLUP);   delay(2); bool low  = digitalRead(6) == LOW;
+    pinMode(6, INPUT_PULLDOWN); delay(2); bool high = digitalRead(6) == HIGH;
+    pinMode(6, INPUT);
+    if (low || high) { g_lidOk = false; return; }
 #endif
     pinMode(SD_SPI_CS_PIN, OUTPUT); digitalWrite(SD_SPI_CS_PIN, HIGH);   // card quiet during panel init
     g_lidOk = lid.init();
@@ -163,14 +187,14 @@ static void filterBars(int y, bool force) {
 
 // ---------- PATTERN: the loop page ----------
 #define WAVE_Y(d)  (22 + (d) * 78)
-#define WAVE_H     72
+#define WAVE_H     62          // the label strip sits under it
 
 static void waveColumn(uint8_t d, int x) {
     const Deck& k = g_decks[d];
     int y0 = WAVE_Y(d), mid = y0 + WAVE_H / 2;
     lid.drawFastVLine(x, y0, WAVE_H, C_BG);
     if (!deckLoaded(d)) return;
-    int hi = mid - k.ovMax[x] * (WAVE_H / 2 - 8) / 128, lo = mid - k.ovMin[x] * (WAVE_H / 2 - 8) / 128;
+    int hi = mid - k.ovMax[x] * (WAVE_H / 2 - 2) / 128, lo = mid - k.ovMin[x] * (WAVE_H / 2 - 2) / 128;
     lid.drawFastVLine(x, hi, lo - hi + 1, d ? C_WAVEB : C_WAVE);
     uint32_t len = g_samples[k.slot].length;
     for (int s = 0; s < k.nSlices; s++)            // slice ticks along the top
@@ -210,7 +234,7 @@ static void patternStatic() {
         else snprintf(b, sizeof(b), "%c LOOP FIT?  %.28s", 'A' + d, k.name);
         lid.setTextSize(1);
         lid.setTextColor((g_curTrack == TRK_DECK_A + d) ? C_TEXT : C_DIM);
-        lid.setCursor(4, WAVE_Y(d) + WAVE_H - 9); lid.print(b);
+        lid.setCursor(4, WAVE_Y(d) + WAVE_H + 3); lid.print(b);
         s_headX[d] = -1;
     }
     filterBars(180, true);
@@ -284,12 +308,10 @@ static void soundStatic() {
         snprintf(title, sizeof(title), "DECK %c", 'A' + d);
         snprintf(name, sizeof(name), "%s", uiDeckRowName(g_soundParam));
         uiDeckRowValue(d, g_soundParam, val, sizeof(val));
-    } else if (g_curTrack == TRK_DRUMS) {
-        snprintf(title, sizeof(title), "DRUM LANE %u", g_curDrumLane + 1);
-        snprintf(name, sizeof(name), "see keys");
     } else {
-        snprintf(title, sizeof(title), "SYNTH %u", g_curTrack + 1);
-        snprintf(name, sizeof(name), "see keys");
+        if (g_curTrack == TRK_DRUMS) snprintf(title, sizeof(title), "DRUM LANE %u", g_curDrumLane + 1);
+        else                         snprintf(title, sizeof(title), "SYNTH %u", g_curTrack + 1);
+        uiSoundRowText(g_soundParam, name, sizeof(name), val, sizeof(val));
     }
     textAt(2, 2, 2, C_DIM, title);
     textAt(2, 28, 4, C_TEXT, name);                    // parameter name, ~32 px tall
@@ -347,8 +369,8 @@ static void songStatic() {
         for (int m = 0; m < SLOT_MUTE_BITS; m++)
             if (sl.mute & (1 << m)) lid.fillRect(x + 2 + m * 2, y + 29, 2, 2, C_HOT);
     }
-    textAt(2, 220, 1, C_DIM, "e/u filter  tab/p repeats  fn sft a s d f g mute 1 2 3 D A B K");
-    textAt(2, 230, 1, C_DIM, "hold AUX = bounce mix + stems to SD");
+    textAt(2, 219, 1, C_DIM, "e/u filter   tab/p repeats   hold AUX = bounce to SD");
+    textAt(2, 230, 1, C_DIM, "mutes: fn sft a s d f g = T1 T2 T3 DRUMS A B KICK");
 }
 
 // ---------- HELP: the six steps, large ----------
@@ -386,6 +408,10 @@ static uint32_t staticHash() {
         }
         case PAGE_SOUND:
             HASH(h, g_soundParam); HASH(h, g_curDrumLane); HASH(h, g_fx); HASH(h, g_bpm);
+            if (!trackIsDeck(g_curTrack)) {      // synth / drum values are plain text: hash that
+                char nm[24], vl[28]; uiSoundRowText(g_soundParam, nm, sizeof(nm), vl, sizeof(vl));
+                h = fnv(h, vl, strlen(vl));
+            }
             if (trackIsDeck(g_curTrack)) {
                 const Deck& k = g_decks[trackDeck(g_curTrack)];
                 HASH(h, k.mode); HASH(h, k.sliceMode); HASH(h, k.nSlices); HASH(h, k.fitBars); HASH(h, k.pitch);

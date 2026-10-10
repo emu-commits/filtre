@@ -1,3 +1,17 @@
+# FILTRE
+
+**A pocket French-touch sampler for the M5Stack Cardputer-ADV + TERM512 lid.**
+Chop a record onto the keys, sweep one filter, let the 909 kick pump it, arrange
+the song and bounce mix + stems to SD. Guide: **[docs/FILTRE.md](docs/FILTRE.md)**.
+
+FILTRE is a fork of **Microgroove** by [lebiro.studio](https://lebiro.studio)
+(MIT), which itself derives parts from
+[Cardputer-Adv-Tracker](https://github.com/qwertyuu/Cardputer-Adv-Tracker) by
+qwertyuu (MIT). Everything below this line is the upstream Microgroove README,
+kept for the instrument it still contains.
+
+---
+
 <p align="center">
   <img src="docs/hero.jpg" alt="Microgroove — a pocket groovebox for the M5Stack Cardputer-ADV" width="640">
 </p>

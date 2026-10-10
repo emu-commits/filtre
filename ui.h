@@ -12,8 +12,8 @@ extern uint8_t g_soundParam;     // selected row on SOUND page
 extern uint8_t g_songCursor;     // selected slot on SONG page
 
 // simple file browser (SAMPLE page)
-#define BROWSER_MAX 64
-extern char    g_fileList[BROWSER_MAX][SAMPLE_NAME_LEN];
+#define BROWSER_MAX 48
+extern char    g_fileList[BROWSER_MAX][LOOP_NAME_LEN];
 extern uint8_t g_fileCount;
 extern uint8_t g_fileSel;
 
@@ -32,6 +32,7 @@ enum DeckRow : uint8_t {
 };
 const char* uiDeckRowName(uint8_t row);
 void uiDeckRowValue(uint8_t deck, uint8_t row, char* out, size_t n);
+void uiSoundRowText(uint8_t row, char* name, size_t nn, char* val, size_t vn);   // synth / drum rows
 bool uiBrowsingLoops();                   // SAMPLE page lists /loops (a deck is focused)
 
 void uiInit();

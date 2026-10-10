@@ -273,7 +273,7 @@ int main() {
             atEnd[g_songPos] = g_cutNow; n++;
         }
         CHECK(abs((int)n - (int)(bar * 7)) < 8, "2+2+2+1 bars then stop (%u vs %u)", n, bar * 7);
-        CHECK(fabsf(atEnd[0] - 20) < 3 && fabsf(atEnd[1] - 140) < 3 && fabsf(atEnd[2] - 254) < 3 && fabsf(atEnd[3] - 51) < 3,
+        CHECK(fabsf(atEnd[0] - 50) < 3 && fabsf(atEnd[1] - 140) < 3 && fabsf(atEnd[2] - 254) < 3 && fabsf(atEnd[3] - 51) < 3,
               "targets reached: %.0f %.0f %.0f %.0f", atEnd[0], atEnd[1], atEnd[2], atEnd[3]);
         g_songOneShot = false; quiet();
     }

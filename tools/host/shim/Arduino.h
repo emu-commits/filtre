@@ -26,5 +26,6 @@ public:
         size_t n = strlen(suf);
         return s.size() >= n && s.compare(s.size() - n, n, suf) == 0;
     }
+    bool startsWith(const char* pre) const { return s.compare(0, strlen(pre), pre) == 0; }
     const char* c_str() const { return s.c_str(); }
 };

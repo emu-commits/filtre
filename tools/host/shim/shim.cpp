@@ -4,10 +4,11 @@
 #include <time.h>
 
 uint32_t micros() { static uint32_t t = 0; return t += 137; }   // deterministic
-uint32_t millis() { return micros() / 1000; }
+uint32_t g_fakeMs __attribute__((weak)) = 0;
+uint32_t millis() { return g_fakeMs ? g_fakeMs : micros() / 1000; }
 
 SDClass SD;
-bool g_needRedraw = false;
+bool g_needRedraw __attribute__((weak)) = false;
 volatile uint32_t g_rsmpArmFrames = 0;
 
 std::string SDClass::root() { const char* e = getenv("FILTRE_SD"); return e ? e : "sd"; }

@@ -43,6 +43,7 @@
 #define DIR_WAVETABLES   "/groovebox/wavetables"
 #define DIR_PROJECTS     "/groovebox/projects"
 #define DIR_LOOPS        "/groovebox/loops"
+#define DIR_LOOPS_LEN    16
 #define DIR_BOUNCE       "/groovebox/bounce"
 
 // ---------- Sample memory ----------
@@ -52,7 +53,8 @@
 #define ARENA_MIN_BYTES   (48 * 1024)
 #define ARENA_HEAP_RESERVE (56 * 1024)   // left for SD, lid, tasks, file buffers
 #define MAX_SAMPLES       16
-#define SAMPLE_NAME_LEN   32
+#define SAMPLE_NAME_LEN   32            // one-shot names (fixed by the GBX v1/v2 layout)
+#define LOOP_NAME_LEN     64            // deck files: real-world sample names are long
 
 // ---------- Wavetables ----------
 #define WT_SIZE          256

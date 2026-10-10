@@ -374,7 +374,8 @@ static void doShort(uint8_t act) {
                 if (k < NUM_DECKS) loadLoop(k); else uiStatus("P1 = DECK A  P2 = DECK B");
             } else if (g_fileCount) {
                 int slot = samplerLoad(g_fileList[g_fileSel]);
-                if (slot >= 0) {
+                if (strlen(g_fileList[g_fileSel]) >= SAMPLE_NAME_LEN) uiStatus("NAME TOO LONG (31)");
+                else if (slot >= 0) {
                     DrumLane& d = g_drumLanes[k];
                     d.engine = ENG_SMPL; d.sampleSlot = (int8_t)slot; d.smp.init();
                     uiStatus("ASSIGNED");
