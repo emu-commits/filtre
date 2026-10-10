@@ -216,7 +216,7 @@ that key is written onto T1 of the current pattern.
 
 ```
 white  fn  Aa  a   s   d   f   g   h   j   k   l   ;   '
-note   C   D   E   F   G   A   B   C   D   E   F   G   A   B
+note   C   D   E   F   G   A   B   C   D   E   F   G   A
 
 black  q   w   r   t   y   i   o   [   ]   \
 note   C#  D#  F#  G#  A#  C#  D#  F#  G#  A#
