@@ -8,6 +8,7 @@
 #include "lid_ui.h"
 
 bool g_lidOk = false;
+bool g_keysOverlay = false;
 
 #ifdef FILTRE_NO_LID
 void lidInit() {}
@@ -144,6 +145,7 @@ static uint32_t fnv(uint32_t h, const void* d, size_t n) {
 #define HASH(h, v) h = fnv(h, &(v), sizeof(v))
 
 static int      s_page = -1;
+#define PAGE_KEYS (-2)                  // s_page while the key map is up
 static uint32_t s_staticHash = 0, s_titleHash = 0;
 static uint32_t s_lastMs = 0;
 static int      s_headX[NUM_DECKS] = { -1, -1 };
@@ -387,6 +389,158 @@ static void helpStatic() {
     textAt(4, 228, 1, C_FILT, b);
 }
 
+// ---------- KEY MAP: the keyboard, labelled for where you are ----------
+// Labels come from keymap.h's own lookups, so they cannot drift from the
+// bindings. All text is const; the overlay owns no memory.
+static const uint8_t k_keyRows[4][14] = {
+    { '`','1','2','3','4','5','6','7','8','9','0','-','=',KC_DEL },
+    { KC_TAB,'q','w','e','r','t','y','u','i','o','p','[',']','\\' },
+    { KC_FN,KC_SHIFT,'a','s','d','f','g','h','j','k','l',';','\'',KC_ENTER },
+    { KC_CTRL,KC_OPT,KC_ALT,'z','x','c','v','b','n','m',',','.','/',KC_SPACE },
+};
+
+static void keyLegend(uint8_t kc, char* o) {
+    const char* s = nullptr;
+    switch (kc) {
+        case KC_DEL: s = "del"; break;  case KC_TAB: s = "tab"; break;  case KC_FN: s = "fn"; break;
+        case KC_SHIFT: s = "Aa"; break; case KC_ENTER: s = "ok"; break; case KC_CTRL: s = "ctl"; break;
+        case KC_OPT: s = "opt"; break;  case KC_ALT: s = "alt"; break;  case KC_SPACE: s = "spc"; break;
+    }
+    if (s) strcpy(o, s); else { o[0] = (char)kc; o[1] = 0; }
+}
+
+// what the key does right now (<= 3 chars) and its group colour; "" = nothing here
+static uint16_t keyFunction(uint8_t kc, char* o) {
+    o[0] = 0;
+    bool play = (g_curPage == PAGE_PATTERN || g_curPage == PAGE_SOUND);
+    if (pianoSemi(kc) >= 0 && (play || g_curPage == PAGE_SONG)) {       // same priority as input.cpp
+        if (g_curPage == PAGE_SONG) {
+            static const char* const m[7] = { "T1", "T2", "T3", "DR", "A", "B", "KIK" };
+            int8_t b = padSlotMute(kc);
+            if (b >= 0) strcpy(o, m[b]);
+        } else if (g_curTrack == TRK_DRUMS) {
+            if (padLane(kc) >= 0) snprintf(o, 4, "%d", padLane(kc) + 1);
+        } else if (trackIsDeck(g_curTrack)) {
+            if (padSlice(kc) >= 0) snprintf(o, 4, "%d", padSlice(kc) + 1);
+        } else {
+            strcpy(o, g_keyNames[pianoSemi(kc) % 12]);
+        }
+        return C_HOT;
+    }
+    uint8_t a = keyAction(kc);
+    if (a >= ACT_TRACK1 && a <= ACT_TRACK3) { snprintf(o, 4, "T%d", a - ACT_TRACK1 + 1); return C_TEXT; }
+    if (a >= ACT_PAT1 && a <= ACT_PAT8) {
+        int k = a - ACT_PAT1;
+        if (g_curPage == PAGE_SAMPLE) {
+            if (!uiBrowsingLoops()) snprintf(o, 4, "L%d", k + 1);
+            else if (k < NUM_DECKS) snprintf(o, 4, "%c", 'A' + k);
+        } else if (g_curPage == PAGE_HELP) {
+            if (k < STYLE_COUNT) snprintf(o, 4, "ST%d", k + 1);
+        } else snprintf(o, 4, "P%d", k + 1);
+        return C_WAVEB;
+    }
+    const char* s = ""; uint16_t c = C_WAVE;
+    bool song = (g_curPage == PAGE_SONG);
+    switch (a) {
+        case ACT_TRACKD: s = "TD";  c = C_TEXT; break;
+        case ACT_LOAD:   s = "LD";  c = C_DIM;  break;
+        case ACT_SAVE:   s = "SV";  c = C_DIM;  break;
+        case ACT_PAGE:   s = "PG";  c = C_DIM;  break;
+        case ACT_BPM_DN: s = "BP-"; c = C_DIM;  break;
+        case ACT_BPM_UP: s = "BP+"; c = C_DIM;  break;
+        case ACT_CUT_DN: s = "CT-"; c = C_FILT; break;
+        case ACT_CUT_UP: s = "CT+"; c = C_FILT; break;
+        case ACT_RES_DN: s = song ? "RP-" : "RS-"; c = C_FILT; break;
+        case ACT_RES_UP: s = song ? "RP+" : "RS+"; c = C_FILT; break;
+        case ACT_CLR:    s = "CLR"; break;
+        case ACT_LEFT:   s = "<";   break;
+        case ACT_DOWN:   s = "v";   break;
+        case ACT_UP:     s = "^";   break;
+        case ACT_RIGHT:  s = ">";   break;
+        case ACT_REC:    s = "REC"; break;
+        case ACT_PLAY:   s = "PLY"; break;
+        case ACT_ACCENT: s = "ACC"; c = C_HOT;  break;
+        case ACT_SONG:   s = "SNG"; c = C_HEAD; break;
+        case ACT_SLIDE:  s = "SLD"; c = C_HEAD; break;
+        case ACT_AUX:    s = "AUX"; c = C_HEAD; break;
+        case ACT_KEYS:   s = "MAP"; c = C_TEXT; break;
+    }
+    strcpy(o, s);
+    return c;
+}
+
+static void keysStatic() {
+    lid.fillScreen(C_BG);
+    static const char* const pages[] = { "PATTERN", "SOUND", "SAMPLE", "SONG", "HELP" };
+    char b[64], trk[12];
+    if (g_curTrack == TRK_DRUMS)        strcpy(trk, "DRUMS");
+    else if (trackIsDeck(g_curTrack))   snprintf(trk, sizeof(trk), "DECK %c", 'A' + trackDeck(g_curTrack));
+    else                                snprintf(trk, sizeof(trk), "SYNTH T%d", g_curTrack + 1);
+    snprintf(b, sizeof(b), "KEY MAP  %s page  %s", pages[g_curPage % 5], trk);
+    textAt(4, 2, 1, C_TEXT, b);
+    textAt(LW - 6 * 14 - 2, 2, 1, C_DIM, "release = back");
+
+    lid.setTextSize(1);
+    for (int r = 0; r < 4; r++)
+        for (int c = 0; c < 14; c++) {
+            uint8_t kc = k_keyRows[r][c];
+            char leg[4], fn[8];
+            keyLegend(kc, leg);
+            uint16_t col = keyFunction(kc, fn);
+            int x = 6 + c * 22, y = 14 + r * 27;
+            if (kc == KC_ENTER) lid.fillRect(x, y, 21, 25, C_BOX);
+            lid.drawRect(x, y, 21, 25, fn[0] ? col : C_BOX);
+            lid.setTextColor(fn[0] ? C_DIM : C_TICK);
+            lid.setCursor(x + (22 - 6 * (int)strlen(leg)) / 2, y + 3);  lid.print(leg);
+            lid.setTextColor(col);
+            lid.setCursor(x + (22 - 6 * (int)strlen(fn)) / 2, y + 14);  lid.print(fn);
+        }
+
+    // the legend: one line per colour, in words
+    const char* ln[8]; uint16_t lc[8];
+    bool play = (g_curPage == PAGE_PATTERN || g_curPage == PAGE_SOUND);
+    char pads[48];
+    lc[0] = C_TEXT;  ln[0] = "T1 T2 T3 track, TD drums>A>B.  Hold: mute";
+    lc[1] = C_WAVEB;
+    switch (g_curPage) {
+        case PAGE_SAMPLE: ln[1] = uiBrowsingLoops() ? "A B: load this loop into deck A or B"
+                                                    : "L1-L8: put this sample on a drum lane"; break;
+        case PAGE_SONG:   ln[1] = "P1-P8: place that pattern in the slot"; break;
+        case PAGE_HELP:   ln[1] = "ST1-ST4: style.  Hold: replace my drums"; break;
+        default:          ln[1] = "P1-P8 pattern.  Hold: clone into it"; break;
+    }
+    lc[2] = C_FILT;
+    ln[2] = (g_curPage == PAGE_SONG) ? "CT slot filter target   RP slot repeats"
+                                     : "CT cutoff   RS resonance.  Hold: sweep";
+    lc[3] = C_HOT;
+    if (g_curPage == PAGE_SONG)        ln[3] = "Mutes for this slot (KIK = kick only)";
+    else if (!play)                    ln[3] = "Pads and notes play on PATTERN and SOUND";
+    else if (g_curTrack == TRK_DRUMS)  ln[3] = "1-8 drum lanes, 1 = kick.  ACC: accent";
+    else if (trackIsDeck(g_curTrack)) {
+        snprintf(pads, sizeof(pads), "1-16 chops of deck %c.  ACC: accent", 'A' + trackDeck(g_curTrack));
+        ln[3] = pads;
+    } else                             ln[3] = "Notes.  ACC: accent.  Hold BP: octave";
+    lc[4] = C_WAVE;  ln[4] = "< v ^ > cursor.  Hold: PLY top, CLR all";
+    lc[5] = C_DIM;
+    ln[5] = (g_curPage == PAGE_SONG) ? "PG next page.  BP tempo (hold: project)"
+                                     : "PG next page (hold: PATTERN).  BP tempo";
+    lc[6] = C_DIM;   ln[6] = "Hold LD load, SV save.  Both: demo";
+    lc[7] = C_HEAD;
+    switch (g_curPage) {
+        case PAGE_SAMPLE: ln[7] = uiBrowsingLoops() ? "AUX load into the deck.  SNG song mode"
+                                                    : "AUX hear the sample.  SNG song mode"; break;
+        case PAGE_SONG:   ln[7] = "AUX loop start (hold: bounce).  SNG song"; break;
+        case PAGE_HELP:   ln[7] = "AUX lid on/off.  SNG song mode"; break;
+        default:          ln[7] = "Hold: SNG resample, SLD bass, AUX mic"; break;
+    }
+    lid.setFont(&fonts::Font2); lid.setTextWrap(false);
+    for (int i = 0; i < 8; i++) {
+        lid.fillRect(4, 125 + i * 14 + 4, 5, 8, lc[i]);
+        lid.setTextColor(lc[i] == C_DIM ? C_TEXT : lc[i]); lid.setCursor(14, 125 + i * 14); lid.print(ln[i]);
+    }
+    lid.setFont(&fonts::Font0);
+}
+
 // ---------- update ----------
 static uint32_t staticHash() {
     uint32_t h = 2166136261u;
@@ -438,8 +592,20 @@ static uint32_t staticHash() {
 void lidUpdate(bool force) {
     if (!g_lidOk) return;                       // shut or absent: draw nothing, spend nothing
     uint32_t now = millis();
-    if (!force && now - s_lastMs < 60) return;
+    bool edge = g_keysOverlay != (s_page == PAGE_KEYS);     // key map going up or down: no wait
+    if (!force && !edge && now - s_lastMs < 60) return;
     s_lastMs = now;
+
+    if (g_keysOverlay) {
+        uint32_t k = 2166136261u;
+        HASH(k, g_curPage); HASH(k, g_curTrack);
+        { bool l = uiBrowsingLoops(); HASH(k, l); }
+        if (s_page != PAGE_KEYS || k != s_staticHash) {
+            s_staticHash = k; s_page = PAGE_KEYS;
+            lid.startWrite(); keysStatic(); lid.endWrite();
+        }
+        return;
+    }
 
     uint32_t h = staticHash();
     bool repaint = (h != s_staticHash) || (s_page != (int)g_curPage);

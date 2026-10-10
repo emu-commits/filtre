@@ -33,10 +33,13 @@
 //   SONG pg: e/u = slot filter target, tab/p = slot repeats
 //
 // PIANO (PATTERN + SOUND pages, synth track selected)
-//   white: fn sft a s d f g h j k l ; ' enter     black: q w r t y i o [ ] \
+//   white: fn sft a s d f g h j k l ; '           black: q w r t y i o [ ] \
 // PADS (drum track): lanes 1..8 on fn sft a s d f g h
 // CHOPS (deck selected): slices 1..8 on fn sft a s d f g h, 9..16 on q w r t y i o [
 // SONG pg: fn sft a s d f g = slot mutes T1 T2 T3 DRUMS A B KICK
+//
+// enter (ok)            held = KEY MAP on the lid: this keyboard, labelled for
+//                       the page and track you are on. Every other key still works.
 // ============================================================
 #pragma once
 #include "config.h"
@@ -73,7 +76,7 @@ enum : uint8_t {
     ACT_NONE = 0,
     // immediate (fire on key-down)
     ACT_LEFT, ACT_RIGHT, ACT_UP, ACT_DOWN,
-    ACT_ACCENT, ACT_REC,
+    ACT_ACCENT, ACT_REC, ACT_KEYS,
     // continuous while held (input.cpp integrates them over time)
     ACT_CUT_DN, ACT_CUT_UP, ACT_RES_DN, ACT_RES_UP,
     // short/long (fire on release / after 450 ms) - keep ranges contiguous
@@ -107,6 +110,7 @@ static inline uint8_t keyAction(uint8_t kc) {
         case ',': return ACT_SLIDE; case '.': return ACT_AUX;
         case '/': return ACT_REC;
         case KC_SPACE: return ACT_PLAY;
+        case KC_ENTER: return ACT_KEYS;
         case 'e':    return ACT_CUT_DN;  case 'u': return ACT_CUT_UP;
         case KC_TAB: return ACT_RES_DN;  case 'p': return ACT_RES_UP;
     }
@@ -117,7 +121,7 @@ static inline uint8_t keyAction(uint8_t kc) {
 static inline bool actImmediate(uint8_t act) {
     switch (act) {
         case ACT_LEFT: case ACT_RIGHT: case ACT_UP: case ACT_DOWN:
-        case ACT_ACCENT: case ACT_REC:
+        case ACT_ACCENT: case ACT_REC: case ACT_KEYS:
         case ACT_CUT_DN: case ACT_CUT_UP: case ACT_RES_DN: case ACT_RES_UP:
             return true;
         default: return false;
@@ -171,7 +175,6 @@ static inline int8_t pianoSemi(uint8_t kc) {
         case 'l':      return 17;  // F'
         case ';':      return 19;  // G'
         case '\'':     return 21;  // A'
-        case KC_ENTER: return 23;  // B'
         // black keys (tab, e, u, p are the E-F / B-C gaps: FILTRE puts the filter there)
         case 'q':      return 1;   // C#
         case 'w':      return 3;   // D#
@@ -250,6 +253,7 @@ static const char* const g_keyHelp[] = {
     "SONG: fn sft a s d f g = mutes",
     "SONG: hold . = BOUNCE to SD",
     "HELP: 4 5 6 7 = style (hold)",
+    "hold ok = KEY MAP on the lid",
 };
 #define HELP_STEP_LINES (sizeof(g_helpSteps) / sizeof(g_helpSteps[0]))
 #define HELP_KEY_LINES  (sizeof(g_keyHelp)  / sizeof(g_keyHelp[0]))

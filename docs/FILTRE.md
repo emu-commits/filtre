@@ -58,6 +58,7 @@ Everything Microgroove binds is unchanged. Additions:
 | **TD** (`3`) | drums → deck A → deck B | mute whichever it is on |
 | **SLD** (`,`) | slide at cursor | write bass in KEY |
 | **AUX** (`.`) | SAMPLE: preview / load loop | mic record to the lane or deck |
+| **enter** (`ok`) | | while held, the lid shows the key map for the current page and track |
 | **SONG** (`n`) | song mode | resample: a pad (1.9 s), or one bar-exact pattern onto the focused deck |
 
 Deck focused: slices 1–8 on `fn sft a s d f g h`, 9–16 on `q w r t y i o [`.

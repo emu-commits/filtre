@@ -92,6 +92,16 @@ int main() {
     // empty machine: no loops loaded, pattern page
     sequencerStop(); run(64);
     deckUnload(0); deckUnload(1); g_songMode = false; g_recEnabled = false;
+    // the key map, in each context
+    g_keysOverlay = true;
+    g_curPage = PAGE_PATTERN; g_curTrack = TRK_DRUMS; shot("17_keys_drums");
+    g_curTrack = TRK_DECK_A; shot("18_keys_deck");
+    g_curTrack = 0; shot("19_keys_synth");
+    g_curPage = PAGE_SONG; shot("20_keys_song");
+    g_curPage = PAGE_SAMPLE; g_curTrack = TRK_DECK_A; uiScanSampleDir(); shot("21_keys_sample_loops");
+    g_curTrack = TRK_DRUMS; uiScanSampleDir(); shot("22_keys_sample_drums");
+    g_curPage = PAGE_HELP; shot("23_keys_help");
+    g_keysOverlay = false;
     g_curPage = PAGE_PATTERN; g_curTrack = 0; g_curStep = 0; setPatternLength(0, STEPS_PER_BAR); shot("15_pattern_empty");
     g_curPage = PAGE_SOUND; g_curTrack = TRK_DECK_A; g_soundParam = 0; shot("16_sound_deck_empty");
     printf("shots written\n");

@@ -326,6 +326,9 @@ static void doImmediate(uint8_t act, const KeySnap& now) {
             g_needRedraw = true; break;
 
         case ACT_ACCENT: break;   // pure modifier
+        case ACT_KEYS:
+            if (!g_lidOk) uiStatus("KEY MAP NEEDS THE LID");
+            break;
         default: break;
     }
 }
@@ -707,6 +710,7 @@ void inputUpdate() {
             default:             now.add((uint8_t)normalizeKey((char)v)); break;
         }
     }
+    g_keysOverlay = now.has(KC_ENTER);         // the lid shows the key map while it is down
     // changed? (compare the sets: the library's isChange() only counts keys)
     bool same = (now.n == s_prev.n);
     for (uint8_t i = 0; same && i < now.n; i++) if (!s_prev.has(now.codes[i])) same = false;

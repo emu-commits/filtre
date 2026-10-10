@@ -18,7 +18,7 @@ RES-         CUT-            CUT+            RES+
      └── black keys / chops 9-16 ──┘
 
  fn  Aa  a   s   d   f   g   h   j   k   l   ;   '   ok
- └──── pads 1-8 / chops 1-8 ────┘   (white keys continue)
+ └──── pads 1-8 / chops 1-8 ────┘   (white keys continue)  KEY MAP
 
 ctrl opt alt  z   x   c   v   b   n    m    ,    .    /    space
 PAGE BPM- BPM+ CLR ◄   ▼   ▲   ►  SONG ACC  SLD  AUX  REC  PLAY
@@ -44,6 +44,13 @@ PAGE BPM- BPM+ CLR ◄   ▼   ▲   ►  SONG ACC  SLD  AUX  REC  PLAY
 | `=` | show which project slot | load project |
 | `del` | show which project slot | save project |
 | `=` + `del` together | load the built-in demo | |
+| `ok` | (nothing) | while held, the lid shows the key map |
+
+**Forgot a key? Hold `ok`.** The lid screen turns into a picture of the
+keyboard with every key labelled for the page and track you are on, and a
+colour-matched legend underneath. Let go and the lid goes back to where it
+was. Everything else keeps working while you hold it, so you can hold `ok`,
+find the key, and press it. The music does not pause.
 
 The pages, in the order `ctrl` steps through them:
 **PATTERN → SOUND → SAMPLE → SONG → HELP**.
@@ -208,7 +215,7 @@ that key is written onto T1 of the current pattern.
 **Play it yourself:** tap `` ` `` to select T1.
 
 ```
-white  fn  Aa  a   s   d   f   g   h   j   k   l   ;   '   ok
+white  fn  Aa  a   s   d   f   g   h   j   k   l   ;   '
 note   C   D   E   F   G   A   B   C   D   E   F   G   A   B
 
 black  q   w   r   t   y   i   o   [   ]   \

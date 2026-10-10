@@ -8,6 +8,7 @@
 #include "config.h"
 
 extern bool g_lidOk;
+extern bool g_keysOverlay;   // true while the KEY MAP key is held: the lid shows the keyboard
 
 // Call after M5Cardputer.begin() and BEFORE SD.begin(): bringing the panel
 // up re-starts the shared Arduino SPI bus, which would drop a mounted card.
