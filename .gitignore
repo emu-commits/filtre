@@ -6,3 +6,4 @@ build/
 .pio/
 .vscode/
 *.o
+tools/host/build/

@@ -1,13 +1,14 @@
 // ============================================================
-// Microgroove — a pocket groovebox for the M5Stack Cardputer-ADV
-// by lebiro.studio
-//   - 3 synth tracks (saw/sqr/tri/sin + wavetables, 303-style resonant
-//     filter, accent, slide); each track switchable 1-3 voices
-//     (mono 303 or polyphonic chords)
-//   - 8 drum lanes: 808 synth / 909 synth / SD samples, choke groups
-//   - 16-step patterns x8, song chaining, live record with quantize
-//   - live mic sampling + engine resampling to microSD
-//   - project save/load to microSD (GBX v2; loads v1 transparently)
+// FILTRE - a pocket French-touch sampler for the M5Stack Cardputer-ADV
+// with the TERM512 lid. A fork of Microgroove by lebiro.studio.
+//   - 2 sample decks, each CHOP (transients on the keys, sequenced)
+//     or LOOP (bar-locked), blended into one resonant filter
+//   - kick-driven pump, swung 909 drums, 303 bass writer
+//   - 8 patterns of 1 or 2 bars, per-step filter locks
+//   - song chain with repeats, mutes and filter targets
+//   - offline bounce of mix + stems to microSD
+//   - Microgroove's 3 synth tracks, 808/909 lanes, mic + resampling
+//   - GBX v3 projects (loads Microgroove v1/v2 transparently)
 //
 // Portions of the synth voice, 808 drums, and audio task are derived
 // from qwertyuu/Cardputer-Adv-Tracker (MIT License) - see LICENSE.
@@ -24,11 +25,13 @@
 #include "audio_engine.h"
 #include "mic_sampler.h"
 #include "ui.h"
+#include "lid_ui.h"
+#include "styles.h"
 
 void inputInit();
 void inputUpdate();
 
-static bool s_sdOk = false;
+bool g_sdOk = false;
 
 void setup() {
     auto cfg = M5.config();
@@ -46,19 +49,29 @@ void setup() {
     M5Cardputer.Speaker.begin();
     M5Cardputer.Speaker.setVolume(200);
 
+    // Lid first, then the card: the lid shares the SD's SPI bus and starting
+    // it re-begins that bus. The internal LCD is on the other host throughout.
+    delay(100);
+    lidInit();
+
     // SD (Cardputer-ADV pinout)
     SPI.begin(SD_SPI_CLK_PIN, SD_SPI_MISO_PIN, SD_SPI_MOSI_PIN, SD_SPI_CS_PIN);
-    s_sdOk = SD.begin(SD_SPI_CS_PIN, SPI, 25000000);
+    g_sdOk = SD.begin(SD_SPI_CS_PIN, SPI, 25000000);
 
-    // Modules
-    micSamplerInit();                // scratch first, then sample pool
+    // Modules. The arena is sized last-but-one so it takes what is really free.
     wavetableInitBuiltins();
-    if (s_sdOk) {
-        samplerInit();               // also creates /groovebox dirs
+    if (g_sdOk) {
+        samplerEnsureDirs();
         wavetableLoadUserFromSD();
     }
     sequencerInit();
-    loadDemoPattern();
+    deckInit();
+    samplerInit();
+    filtreDefaults();                // FILTRE kit + drums on pattern 1, 122 BPM
+
+    Serial.printf("FILTRE boot: heap %u, arena %u, sd %d, lid %d\n",
+                  (unsigned)ESP.getFreeHeap(), (unsigned)g_arenaCap, g_sdOk, g_lidOk);
+    lidBootScreen();
 
     uiSplash();
     while (true) {
@@ -71,25 +84,26 @@ void setup() {
     inputInit();
     audioEngineStart();              // render task on core 0
 
-    if (!s_sdOk) uiStatus("NO SD CARD");
+    if (!g_sdOk) uiStatus("NO SD: =+del = DEMO");
     g_needRedraw = true;
 }
 
 void loop() {
     inputUpdate();
     micSamplerUpdate();
-    sequencerTick();
 
     if (g_needRedraw) {
-        uiDraw();
         g_needRedraw = false;
+        uiDraw();
     }
 
-    // keep the scope alive on the sound page
-    if (g_curPage == PAGE_SOUND && g_playing) {
+    // moving parts while playing: scope, playheads, the live filter bar
+    if (g_playing) {
         static uint32_t last = 0;
-        if (millis() - last > 60) { last = millis(); uiDraw(); }
+        uint32_t every = (g_curPage == PAGE_SOUND) ? 60 : 120;
+        if (millis() - last > every) { last = millis(); uiDraw(); }
     }
+    lidUpdate(false);
 
-    delay(4);
+    delay(2);
 }

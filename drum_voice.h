@@ -95,6 +95,17 @@ struct DrumSynthVoice {
                     decayMul = 0.9965f; pitchDecMul = 1.0f;
                     noiseAmt = 1.0f; toneMix = 0.0f; drive = 0; hpCoef = 0.65f;
                     break;
+                case DT_CLAP9:  // 909 clap: brighter bursts, longer tail
+                    freq = 0; pitchEnv = 0;
+                    decayMul = 0.9989f; pitchDecMul = 1.0f;
+                    noiseAmt = 1.0f; toneMix = 0.0f; drive = 0; hpCoef = 0.38f;
+                    clapCount = 3; clapTimer = 0;
+                    break;
+                case DT_RIM:    // rimshot: short driven tick
+                    freq = 1680.0f * tuneMul; pitchEnv = 220.0f;
+                    decayMul = 0.9925f; pitchDecMul = 0.990f;
+                    noiseAmt = 0.25f; toneMix = 0.9f; drive = 1.0f; hpCoef = 0.6f;
+                    break;
                 default:        // DT_HAT_O open hat: bright, long
                     freq = 0; pitchEnv = 0;
                     decayMul = 0.9993f; pitchDecMul = 1.0f;
@@ -143,8 +154,8 @@ struct DrumSynthVoice {
             hpState += hpCoef * (n - hpState);
             float hn = n - hpState;
 
-            // 808 clap: 3 fast retriggered noise bursts
-            if (!is909 && type == DT_HAT_O_OR_CLAP && clapCount > 0) {
+            // clap: 3 fast retriggered noise bursts
+            if (clapCount > 0) {
                 clapTimer += 1.0f;
                 if (clapTimer > SAMPLE_RATE * 0.011f) {   // ~11 ms apart
                     clapTimer = 0; clapCount--;
@@ -158,6 +169,8 @@ struct DrumSynthVoice {
     }
 };
 
+#define DRUM_ACCENT_GAIN 1.4f
+
 // ---------- Lane: engine choice + params + both voices ----------
 struct DrumLane {
     DrumEngine engine;
@@ -167,21 +180,24 @@ struct DrumLane {
     float      tune;         // semitones -12..+12 (synth) / pitch (sample)
     float      decay;        // 0.5..2.0 (synth engines only)
     uint8_t    chokeGroup;   // 0 = none; lanes sharing a group choke each other
+    float      vel;          // per-hit level: 1.0 normal, DRUM_ACCENT_GAIN accented
 
     DrumSynthVoice sv;
     SampleVoice    smp;
 
     void init(DrumEngine e, uint8_t t) {
         engine = e; type = t; sampleSlot = -1;
-        volume = 0.85f; tune = 0.0f; decay = 1.0f; chokeGroup = 0;
+        volume = 0.85f; tune = 0.0f; decay = 1.0f; chokeGroup = 0; vel = 1.0f;
         sv.init(); smp.init();
     }
 
-    void trigger() {
+    void trigger(bool accent = false) {
+        vel = accent ? DRUM_ACCENT_GAIN : 1.0f;
         if (engine == ENG_SMPL) {
-            smp.trigger(sampleSlot, powf(2.0f, tune / 12.0f), volume);
+            smp.trigger(sampleSlot, powf(2.0f, tune / 12.0f), volume * vel);
         } else {
-            sv.trigger(engine == ENG_909, type, decay, tune);
+            uint8_t t = (engine == ENG_909) ? type : (uint8_t)(type % DT_COUNT_808);
+            sv.trigger(engine == ENG_909, t, decay, tune);
         }
     }
 
@@ -192,6 +208,6 @@ struct DrumLane {
 
     inline float render() {
         if (engine == ENG_SMPL) return smp.render() * 1.0f;   // volume baked into gain
-        return sv.render() * volume;
+        return sv.render() * volume * vel;
     }
 };

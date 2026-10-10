@@ -1,15 +1,18 @@
 // ============================================================
-// Microgroove - keymap.h
-// THE single source of truth for key assignments.
+// FILTRE - keymap.h  (from Microgroove's v6 keymap)
+// THE single source of truth for key assignments, and for the HELP
+// page text (g_keyHelp below) so the two cannot drift apart.
 // One key = one function; hold 0.5 s for the second thing.
 //
 //                       SHORT (tap)              LONG (hold 450 ms)
-// ` 1 2 3               select track 1/2/3/D     mute track
+// ` 1 2                 select track 1/2/3       mute track
+// 3   TD                drums -> deck A -> B     mute drums / that deck
 // 4 5 6 7 8 9 0 -       select pattern 1..8      clone current -> there
-//                       (SAMPLE pg: assign lane) (SONG pg: place = short)
+//                       (SAMPLE pg: assign lane, or load deck A/B)
+//                       (SONG pg: place)  (HELP pg: P1-P4 = style)
 // =                     LOAD info                LOAD project
 // del                   SAVE info                SAVE project
-//                       (LOAD+SAVE held together = demo pattern)
+//                       (LOAD+SAVE held together = demo)
 // ctl                   next page                jump to PATTERN page
 // opt                   BPM -1                   octave-  (SONG pg: project-)
 // alt                   BPM +1                   octave+  (SONG pg: project+)
@@ -17,24 +20,23 @@
 //                       (held while REC+playing = erase at playhead)
 // x c v b               arrows LEFT DOWN UP RIGHT (immediate, auto-repeat)
 // n   SONG              toggle song mode         RESAMPLE the mix (playing)
-//                                                -> then tap a pad to commit
 // m   ACC               held = accent modifier   (none - pure modifier)
-// ,   SLD               toggle slide at cursor   (reserved)
-// .   AUX               SAMPLE pg: preview       MIC RECORD to current lane
-//                       SONG pg: set loop start  (keep holding = record,
-//                                                 release = trim + commit)
+// ,   SLD               toggle slide at cursor   WRITE BASS in KEY
+// .   AUX               SAMPLE pg: preview/load  MIC RECORD (lane or deck)
+//                       SONG pg: set loop start  SONG pg: BOUNCE to SD
 // /   REC               toggle live record       (none)
 // spc                   play / stop              play from top
 //
-// PIANO (PATTERN + SOUND pages, synth track selected)
-//   white: fn sft a s d f g h j k l ; ' ok   = C D E F G A B C' D' E' F' G' A' B'
-//   black: q w  r t y  i o  [ ] \            = C# D# F# G# A# C#' D#' F#' G#' A#'
-//   dead:  tab e u p                          (piano E-F / B-C gaps)
-//   hold ACC (m) while playing a note = accent; overlapping notes = slide
+// THE FILTER (the four keys the piano leaves dead), any page:
+//   e / u               cutoff down / up   (hold REC-armed = record the sweep)
+//   tab / p             resonance down / up
+//   SONG pg: e/u = slot filter target, tab/p = slot repeats
 //
-// PADS (drum track selected): fn sft a s d f g h = lanes 1..8
-//   PATTERN pg: play + record   SOUND pg: audition/select
-//   after RESAMPLE: first pad tapped receives the capture
+// PIANO (PATTERN + SOUND pages, synth track selected)
+//   white: fn sft a s d f g h j k l ; ' enter     black: q w r t y i o [ ] \
+// PADS (drum track): lanes 1..8 on fn sft a s d f g h
+// CHOPS (deck selected): slices 1..8 on fn sft a s d f g h, 9..16 on q w r t y i o [
+// SONG pg: fn sft a s d f g = slot mutes T1 T2 T3 DRUMS A B KICK
 // ============================================================
 #pragma once
 #include "config.h"
@@ -71,7 +73,9 @@ enum : uint8_t {
     ACT_NONE = 0,
     // immediate (fire on key-down)
     ACT_LEFT, ACT_RIGHT, ACT_UP, ACT_DOWN,
-    ACT_SLIDE, ACT_ACCENT, ACT_REC,
+    ACT_ACCENT, ACT_REC,
+    // continuous while held (input.cpp integrates them over time)
+    ACT_CUT_DN, ACT_CUT_UP, ACT_RES_DN, ACT_RES_UP,
     // short/long (fire on release / after 450 ms) - keep ranges contiguous
     ACT_TRACK1, ACT_TRACK2, ACT_TRACK3, ACT_TRACKD,
     ACT_PAT1, ACT_PAT2, ACT_PAT3, ACT_PAT4,
@@ -79,7 +83,7 @@ enum : uint8_t {
     ACT_LOAD, ACT_SAVE,
     ACT_BPM_DN, ACT_BPM_UP,
     ACT_PAGE, ACT_PLAY, ACT_CLR,
-    ACT_SONG, ACT_AUX,
+    ACT_SONG, ACT_AUX, ACT_SLIDE,
 };
 
 // ---- key -> action (returns ACT_NONE for piano-only / dead keys) ----
@@ -103,6 +107,8 @@ static inline uint8_t keyAction(uint8_t kc) {
         case ',': return ACT_SLIDE; case '.': return ACT_AUX;
         case '/': return ACT_REC;
         case KC_SPACE: return ACT_PLAY;
+        case 'e':    return ACT_CUT_DN;  case 'u': return ACT_CUT_UP;
+        case KC_TAB: return ACT_RES_DN;  case 'p': return ACT_RES_UP;
     }
     return ACT_NONE;
 }
@@ -111,7 +117,8 @@ static inline uint8_t keyAction(uint8_t kc) {
 static inline bool actImmediate(uint8_t act) {
     switch (act) {
         case ACT_LEFT: case ACT_RIGHT: case ACT_UP: case ACT_DOWN:
-        case ACT_SLIDE: case ACT_ACCENT: case ACT_REC:
+        case ACT_ACCENT: case ACT_REC:
+        case ACT_CUT_DN: case ACT_CUT_UP: case ACT_RES_DN: case ACT_RES_UP:
             return true;
         default: return false;
     }
@@ -128,7 +135,7 @@ static inline bool actRepeats(uint8_t act) {
 // label shown next to the hold-progress bar
 static inline const char* actLongName(uint8_t act) {
     if (act >= ACT_TRACK1 && act <= ACT_TRACK3) return "MUTE";
-    if (act == ACT_TRACKD)                      return "MUTE DRUMS";
+    if (act == ACT_TRACKD)                      return "MUTE";
     if (act >= ACT_PAT1 && act <= ACT_PAT8)     return "CLONE";
     switch (act) {
         case ACT_LOAD:   return "LOAD";
@@ -140,6 +147,7 @@ static inline const char* actLongName(uint8_t act) {
         case ACT_BPM_UP: return "OCT+ / PRJ+";
         case ACT_SONG:   return "RESAMPLE";
         case ACT_AUX:    return "MIC SAMPLE";
+        case ACT_SLIDE:  return "WRITE BASS";
     }
     return "";
 }
@@ -164,7 +172,7 @@ static inline int8_t pianoSemi(uint8_t kc) {
         case ';':      return 19;  // G'
         case '\'':     return 21;  // A'
         case KC_ENTER: return 23;  // B'
-        // black keys (tab, e, u, p intentionally dead: E-F / B-C gaps)
+        // black keys (tab, e, u, p are the E-F / B-C gaps: FILTRE puts the filter there)
         case 'q':      return 1;   // C#
         case 'w':      return 3;   // D#
         case 'r':      return 6;   // F#
@@ -189,3 +197,59 @@ static inline int8_t padLane(uint8_t kc) {
     }
     return -1;
 }
+
+// ---- chops: slices 1..16 when a deck is selected, or -1 ----
+static inline int8_t padSlice(uint8_t kc) {
+    int8_t lane = padLane(kc);
+    if (lane >= 0) return lane;
+    switch (kc) {
+        case 'q': return 8;   case 'w': return 9;   case 'r': return 10;  case 't': return 11;
+        case 'y': return 12;  case 'i': return 13;  case 'o': return 14;  case '[': return 15;
+    }
+    return -1;
+}
+
+// ---- SONG page: slot mute toggles on the first seven pads (bit index) ----
+static inline int8_t padSlotMute(uint8_t kc) {
+    int8_t lane = padLane(kc);
+    return (lane >= 0 && lane < 7) ? lane : -1;
+}
+
+// ---- HELP text: the six steps, then the bindings above, in the same words ----
+static const char* const g_helpSteps[] = {
+    "1 PLAY. FILTRE drums are loaded.",
+    "2 TD x2 = deck A. PG to SAMPLE,",
+    "  pick a loop, AUX loads it.",
+    "3 Keys play its chops. REC+PLAY",
+    "  and tap them in: your loop.",
+    "4 e/u sweep the filter. With",
+    "  REC on, the sweep is kept.",
+    "5 Hold SLD = bass in KEY. Play",
+    "  the piano on T1 to change it.",
+    "6 SONG: place patterns, e/u set",
+    "  each slot's filter. Hold AUX",
+    "  on SONG = bounce to SD.",
+};
+static const char* const g_keyHelp[] = {
+    "spc play/stop (hold=from top)",
+    "ctl page   / rec   z clr",
+    "x c v b = arrows  m = accent",
+    "e u = CUTOFF   tab p = RESO",
+    "` 1 2 = T1 T2 T3 (hold=mute)",
+    "3 = drums>deckA>deckB (hold=mute)",
+    "4..- patterns (hold=clone)",
+    "= load  del save  (both=demo)",
+    "opt/alt bpm (hold=octave/prj)",
+    "notes: home row + q w r t y..",
+    "deck: chops on fn..h + q..[",
+    ", slide (hold=WRITE BASS)",
+    "n song (hold+play=RESAMPLE)",
+    "hold . = MIC to lane or deck",
+    "lane 1 (kick) pumps the loop",
+    "SONG: e/u target tab/p repeats",
+    "SONG: fn sft a s d f g = mutes",
+    "SONG: hold . = BOUNCE to SD",
+    "HELP: 4 5 6 7 = style (hold)",
+};
+#define HELP_STEP_LINES (sizeof(g_helpSteps) / sizeof(g_helpSteps[0]))
+#define HELP_KEY_LINES  (sizeof(g_keyHelp)  / sizeof(g_keyHelp[0]))
