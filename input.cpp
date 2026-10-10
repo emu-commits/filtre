@@ -688,21 +688,29 @@ void inputUpdate() {
         if (nowMs - lastAnim > 40) { lastAnim = nowMs; g_needRedraw = true; }
     }
 
-    if (!M5Cardputer.Keyboard.isChange()) return;
-
-    // -- build snapshot --
-    Keyboard_Class::KeysState st = M5Cardputer.Keyboard.keysState();
+    // -- build snapshot straight from the key matrix --
+    // Not keysState(): it never reports the del key as `del`, and it drops
+    // every other key while fn is held (fn is pad 1 here, so chords matter).
     KeySnap now;
-    if (st.fn)    now.add(KC_FN);
-    if (st.shift) now.add(KC_SHIFT);
-    if (st.ctrl)  now.add(KC_CTRL);
-    if (st.opt)   now.add(KC_OPT);
-    if (st.alt)   now.add(KC_ALT);
-    if (st.tab)   now.add(KC_TAB);
-    if (st.del)   now.add(KC_DEL);
-    if (st.enter) now.add(KC_ENTER);
-    if (st.space) now.add(KC_SPACE);
-    for (auto k : st.word) now.add((uint8_t)normalizeKey(k));
+    for (const auto& pos : M5Cardputer.Keyboard.keyList()) {
+        uint8_t v = (uint8_t)M5Cardputer.Keyboard.getKeyValue(pos).value_first;   // unshifted legend
+        switch (v) {
+            case KEY_FN:         now.add(KC_FN);    break;
+            case KEY_LEFT_SHIFT: now.add(KC_SHIFT); break;
+            case KEY_LEFT_CTRL:  now.add(KC_CTRL);  break;
+            case KEY_OPT:        now.add(KC_OPT);   break;
+            case KEY_LEFT_ALT:   now.add(KC_ALT);   break;
+            case KEY_TAB:        now.add(KC_TAB);   break;
+            case KEY_BACKSPACE:  now.add(KC_DEL);   break;
+            case KEY_ENTER:      now.add(KC_ENTER); break;
+            case ' ':            now.add(KC_SPACE); break;
+            default:             now.add((uint8_t)normalizeKey((char)v)); break;
+        }
+    }
+    // changed? (compare the sets: the library's isChange() only counts keys)
+    bool same = (now.n == s_prev.n);
+    for (uint8_t i = 0; same && i < now.n; i++) if (!s_prev.has(now.codes[i])) same = false;
+    if (same) return;
 
     // -- newly pressed --
     for (uint8_t i = 0; i < now.n; i++) {
