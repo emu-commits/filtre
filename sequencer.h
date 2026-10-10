@@ -194,4 +194,4 @@ void writeSynthAtCursor(uint8_t note, uint8_t octave, bool accent);
 void clearCellAtCursor();
 void clearStepAtPlayhead();         // held-delete erase while recording
 
-void loadDemoPattern();             // styles.cpp: the FILTRE miniature
+bool loadDemoPattern();             // styles.cpp: the FILTRE miniature

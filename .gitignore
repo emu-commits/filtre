@@ -7,3 +7,4 @@ build/
 .vscode/
 *.o
 tools/host/build/
+dist/

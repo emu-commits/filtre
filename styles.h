@@ -18,7 +18,7 @@ void styleApply(uint8_t style, uint8_t pattern);   // drums, BPM, swing, pump, f
 bool styleNeedsConfirm(uint8_t style, uint8_t pattern);   // it would overwrite the player's own notes
 void writeBass(uint8_t pattern, uint8_t mode);     // 303 line on T1 in the current KEY
 void filtreDefaults();                             // power-on state: kit + FILTRE style on P1
-void loadDemoPattern();                            // no-card demo: factory loop + 4-pattern song
+bool loadDemoPattern();                            // no-card demo: factory loop + 4-pattern song
 
 // factory_loop.cpp - original audio, CC0, mu-law @ 22.05 kHz
 extern const uint8_t  g_factoryLoop[];

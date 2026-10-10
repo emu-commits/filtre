@@ -18,7 +18,10 @@ mix plus stems; vocals go on afterwards in a DAW.
 5. Hold **SLD** to write a bass line in KEY. Play the piano on T1 to change it.
 6. **SONG**: place patterns, **e / u** set each slot's filter. Hold **AUX** on SONG to bounce to SD.
 
-No card? Hold **LOAD + SAVE** for the built-in demo: an original CC0 loop and a
+Key-by-key workflows are in [USER-GUIDE.md](USER-GUIDE.md).
+
+No card? Hold **LOAD + SAVE** for the built-in demo: an original CC0 loop (played
+straight from flash, so it costs no sample memory) and a
 four-slot song that opens the filter.
 
 ## The signal path
@@ -156,7 +159,7 @@ drives GPIO 6, as the LoRa cap's BUSY pin does, the lid code stays off the pins.
 ## Tests without the hardware
 
 ```
-make -C tools/host test       # the real engine, natively: 57 checks
+make -C tools/host test       # the real engine, natively: 61 checks
 make -C tools/host preview    # both screens of every page as PNG, tools/host/build/shots
 ```
 

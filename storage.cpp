@@ -4,6 +4,7 @@
 // slots with repeats, mutes and filter targets. v1/v2 still load.
 // ============================================================
 #include "storage.h"
+#include "styles.h"
 #include "sequencer.h"
 #include "sampler.h"
 #include "wavetable.h"
@@ -230,6 +231,11 @@ static void applyDeck(int d, const SaveDeck& o) {
     if (!o.name[0]) return;
     char name[LOOP_NAME_LEN];
     memcpy(name, o.name, LOOP_NAME_LEN); name[LOOP_NAME_LEN - 1] = 0;
+    if (!strcmp(name, "FILTRE-DEMO")) {             // the factory loop lives in flash, not on the card
+        int fs = samplerAddExternal(name, g_factoryLoop, g_factoryLoopFrames, SAMPLE_RATE, FMT_ULAW,
+                                    d == 0 ? OWN_DECK_A : OWN_DECK_B);
+        if (fs < 0 || !deckAdopt(d, fs)) return;
+    } else
     if (!deckLoad(d, name)) return;                 // file gone: deck stays empty
     // the saved chop only makes sense on the same audio
     uint32_t len = g_samples[k.slot].length;

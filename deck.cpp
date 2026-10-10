@@ -35,7 +35,7 @@ void deckInit() {
 // ---------- analysis (core 1, read-only on the sample) ----------
 static inline int32_t rawAt(const Deck& k, uint32_t i) {
     const SampleInfo& s = g_samples[k.slot];
-    return (int32_t)smpRead(g_arena + s.offset, s.fmt, i);
+    return (int32_t)smpRead(smpData(s), s.fmt, i);
 }
 
 static void buildOverview(Deck& k) {
@@ -232,7 +232,7 @@ static void voiceStart(Deck& k, float start, float end, float inc, float vel, bo
     k.v[k.cur].fadeOut = true;                          // cut the previous hit, click-free
     k.cur ^= 1;
     ChopVoice& v = k.v[k.cur];
-    v.data  = g_arena + s.offset;
+    v.data  = smpData(s);
     v.fmt   = s.fmt;
     v.start = start; v.end = end;
     v.inc   = inc;

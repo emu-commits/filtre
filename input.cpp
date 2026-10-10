@@ -673,8 +673,7 @@ void inputUpdate() {
         if (iLoad >= 0 && iSave >= 0) {
             s_holds[iLoad].fired = true;
             s_holds[iSave].fired = true;
-            loadDemoPattern();
-            uiStatus("DEMO: PLAY");
+            uiStatus(loadDemoPattern() ? "DEMO: PLAY" : "DEMO: NO LOOP");
             g_needRedraw = true;
             prog = 0; lbl = "";
         }

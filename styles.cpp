@@ -164,7 +164,7 @@ void filtreDefaults() {
 }
 
 // The FILTRE miniature: closed filter -> bass in -> wide open -> back down.
-void loadDemoPattern() {
+bool loadDemoPattern() {
     engineLock();
     for (int p = 0; p < 4; p++) { g_patterns[p].length = STEPS_PER_BAR; clearPattern(p); }
     filtreDefaults();
@@ -172,8 +172,8 @@ void loadDemoPattern() {
 
     // factory loop on deck A, bar-locked
     if (!deckLoaded(0)) {
-        int slot = samplerAddRaw("FILTRE-DEMO", g_factoryLoop, g_factoryLoopFrames,
-                                 SAMPLE_RATE, FMT_ULAW, OWN_DECK_A);
+        int slot = samplerAddExternal("FILTRE-DEMO", g_factoryLoop, g_factoryLoopFrames,
+                                      SAMPLE_RATE, FMT_ULAW, OWN_DECK_A);
         if (slot >= 0 && deckAdopt(0, slot)) {
             g_decks[0].mode = DECK_LOOP;
             g_decks[0].fitBars = deckGuessBars(0, g_bpm, true);
@@ -195,4 +195,5 @@ void loadDemoPattern() {
     g_curPattern = 0;
     g_songMode = true;
     engineUnlock();
+    return deckLoaded(0);
 }

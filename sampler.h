@@ -21,6 +21,7 @@ struct SampleInfo {
     uint8_t  fmt;                    // SampleFmt
     uint8_t  owner;                  // SampleOwner (metering only)
     bool     used;
+    const uint8_t* ext;              // set: data lives in flash, not in the arena (0 bytes of it)
 };
 
 extern uint8_t*   g_arena;           // allocated once at boot
@@ -34,6 +35,9 @@ static inline float smpRead(const uint8_t* d, uint8_t fmt, uint32_t i) {
 }
 static inline bool samplerValid(int slot) {
     return slot >= 0 && slot < MAX_SAMPLES && g_samples[slot].used;
+}
+static inline const uint8_t* smpData(const SampleInfo& s) {
+    return s.ext ? s.ext : g_arena + s.offset;
 }
 
 bool samplerInit();                       // allocate arena (no SD access)
@@ -53,7 +57,11 @@ uint32_t samplerBytes(int slot);
 uint32_t samplerOwnerBytes(uint8_t owner);
 static inline uint32_t samplerFreeBytes() { return g_arenaCap - g_arenaUsed; }
 
-// Copy ready-made sample data (the factory loop in flash) into the arena.
+// Register ready-made sample data that stays where it is (the factory loop
+// in flash): costs no arena, so it works however small the arena came up.
+int  samplerAddExternal(const char* name, const uint8_t* data, uint32_t frames,
+                        uint32_t rate, uint8_t fmt, uint8_t owner);
+// Copy ready-made sample data into the arena.
 int  samplerAddRaw(const char* name, const uint8_t* data, uint32_t frames,
                    uint32_t rate, uint8_t fmt, uint8_t owner);
 
@@ -97,7 +105,7 @@ struct SampleVoice {
 
     void trigger(int slot, float pitch, float volume) {
         if (!samplerValid(slot)) { active = false; return; }
-        data   = g_arena + g_samples[slot].offset;
+        data   = smpData(g_samples[slot]);
         fmt    = g_samples[slot].fmt;
         len    = g_samples[slot].length;
         pos    = 0;

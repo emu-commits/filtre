@@ -102,7 +102,7 @@ static int freeSlot() {
 }
 
 uint32_t samplerBytes(int slot) {
-    if (!samplerValid(slot)) return 0;
+    if (!samplerValid(slot) || g_samples[slot].ext) return 0;
     uint32_t b = g_samples[slot].length * (g_samples[slot].fmt == FMT_PCM16 ? 2 : 1);
     return (b + 1) & ~1u;
 }
@@ -129,7 +129,7 @@ void samplerFree(int slot) {
 }
 
 static int registerSample(const char* name, uint32_t frames, uint32_t rate,
-                          uint8_t fmt, uint8_t owner) {
+                          uint8_t fmt, uint8_t owner, const uint8_t* ext = nullptr) {
     int slot = freeSlot();
     if (slot < 0) return -1;
     SampleInfo& s = g_samples[slot];
@@ -141,8 +141,15 @@ static int registerSample(const char* name, uint32_t frames, uint32_t rate,
     s.fmt    = fmt;
     s.owner  = owner;
     s.used   = true;
+    s.ext    = ext;                  // external data takes no arena (samplerBytes = 0)
     g_arenaUsed += samplerBytes(slot);
     return slot;
+}
+
+int samplerAddExternal(const char* name, const uint8_t* data, uint32_t frames,
+                       uint32_t rate, uint8_t fmt, uint8_t owner) {
+    if (g_tailHeld || !data || !frames) return -1;
+    return registerSample(name, frames, rate, fmt, owner, data);
 }
 
 int samplerAddRaw(const char* name, const uint8_t* data, uint32_t frames,

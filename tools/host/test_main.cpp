@@ -278,6 +278,21 @@ int main() {
         g_songOneShot = false; quiet();
     }
 
+    SECTION("demo loop plays from flash: no arena needed");
+    {
+        freshProject();
+        uint32_t cap = g_arenaCap; g_arenaCap = g_arenaUsed;          // a device whose arena came up full/tiny
+        CHECK(loadDemoPattern() && deckLoaded(0), "demo loads with 0 bytes of arena free");
+        CHECK(g_arenaUsed == g_arenaCap && samplerOwnerBytes(OWN_DECK_A) == 0, "and takes none (%u used)", g_arenaUsed);
+        g_arenaCap = cap;
+        sequencerStart(true); int16_t b[256]; int32_t peak = 0;
+        g_fx.cutoff = 254; g_songMode = false;
+        for (int i = 0; i < 200; i++) { engineRender(b, 256, OUT_SCALE_BOUNCE); for (int j = 0; j < 256; j++) if (abs(b[j]) > peak) peak = abs(b[j]); }
+        CHECK(peak > 2000, "it is audible (peak %d)", (int)peak);
+        quiet(); deckUnload(0);
+        CHECK(!deckLoaded(0) && g_arenaUsed == 0, "unloading it leaves the arena untouched (%u)", g_arenaUsed);
+    }
+
     SECTION("project v3 round trip + upstream v1 file");
     {
         Pattern keep = g_patterns[1]; FxParams fx = g_fx; SongSlot sl = g_song[2];
