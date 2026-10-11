@@ -2,8 +2,9 @@
 // FILTRE - lid_ui.cpp
 // Pins (TERM512 / AREA512 CapTFT, shared with the LoRa cap header):
 //   SCLK 40  MOSI 14  MISO 39 (SD only)  DC 6  CS 5  RST 3  no backlight pin
-// No framebuffer: static parts are painted once per page, moving parts
-// (playheads, filter bar, step row) are patched in place.
+// The lid is the editor: the pattern grid, the settings list, the browser,
+// the song. No framebuffer, and no repaint either: every piece on a page
+// remembers what it last drew and is redrawn only when that changes.
 // ============================================================
 #include "lid_ui.h"
 
@@ -88,7 +89,7 @@ lgfx::LGFX_Sprite* lidHostSprite() { return &lid; }
 static bool     s_inited = false;
 
 // palette
-static uint16_t C_BG, C_WAVE, C_WAVEB, C_HEAD, C_FILT, C_TICK, C_TEXT, C_DIM, C_BOX, C_HOT;
+static uint16_t C_BG, C_WAVE, C_WAVEB, C_HEAD, C_FILT, C_TICK, C_TEXT, C_DIM, C_BOX, C_HOT, C_ACC, C_SYN[3];
 
 void lidInit() {
 #ifdef FILTRE_LID_FORCE_FAIL
@@ -113,6 +114,8 @@ void lidInit() {
     C_FILT = lid.color565(0xff, 0xb0, 0x00);  C_TICK = lid.color565(0x7a, 0x6a, 0x58);
     C_TEXT = 0xFFFF;                          C_DIM  = lid.color565(0x90, 0x88, 0x80);
     C_BOX  = lid.color565(0x30, 0x28, 0x22);  C_HOT  = lid.color565(0xff, 0x20, 0x60);
+    C_ACC  = lid.color565(0x63, 0x30, 0x00);
+    C_SYN[0] = lid.color565(0x00, 0xff, 0xff); C_SYN[1] = lid.color565(0x00, 0xff, 0x00); C_SYN[2] = lid.color565(0xff, 0xff, 0x00);
 }
 
 void lidBootScreen() {
@@ -130,263 +133,324 @@ void lidBootScreen() {
     lid.endWrite();
 }
 
-void lidToggle() {
-    if (!s_inited) return;                     // never came up: stay off
-    g_lidOk = !g_lidOk;
-    if (!g_lidOk) lid.fillScreen(0);
-}
-
 // ---------- change detection ----------
+// A full-screen clear takes ~60 ms on this bus and the loop cannot read keys
+// meanwhile. The panel is cleared once, on entering a page. After that each
+// piece (grid cell, list row, song slot) is compared with what it last drew.
 static uint32_t fnv(uint32_t h, const void* d, size_t n) {
     const uint8_t* p = (const uint8_t*)d;
     while (n--) { h ^= *p++; h *= 16777619u; }
     return h;
 }
+#define FNV0 2166136261u
 #define HASH(h, v) h = fnv(h, &(v), sizeof(v))
+static uint32_t hashStr(uint32_t h, const char* s) { return fnv(h, s, strlen(s)); }
+
+#define CI_CELL(r, c) ((r) * 16 + (c))  // PATTERN: 14 rows x 16 steps; other pages use 0.. as rows / slots
+#define CI_LABEL(r)   (224 + (r))
+#define CI_TITLE      238
+#define CI_FOOT       239
+#define CACHE_N       240
+static uint32_t s_cache[CACHE_N];       // 0 = never drawn
+static bool stale(int i, uint32_t h) {
+    h |= 1;
+    if (s_cache[i] == h) return false;
+    s_cache[i] = h;
+    return true;
+}
 
 static int      s_page = -1;
 #define PAGE_KEYS (-2)                  // s_page while the key map is up
-static uint32_t s_staticHash = 0, s_titleHash = 0;
+static uint32_t s_keysHash = 0;
 static uint32_t s_lastMs = 0;
-static int      s_headX[NUM_DECKS] = { -1, -1 };
-static int      s_cutW = -1, s_resW = -1;
-static int      s_stepShown = -1;
+static int      s_footMode = -1;
+
+void lidToggle() {
+    if (!s_inited) return;                     // never came up: stay off
+    g_lidOk = !g_lidOk;
+    s_page = -1;
+    if (!g_lidOk) lid.fillScreen(0);
+}
 
 // ---------- shared pieces ----------
-static void textAt(int x, int y, uint8_t size, uint16_t col, const char* s) {
-    lid.setTextSize(size); lid.setTextColor(col, C_BG); lid.setCursor(x, y); lid.print(s);
+static void textAt(int x, int y, uint8_t size, uint16_t col, const char* s, uint16_t bg) {
+    lid.setTextSize(size); lid.setTextColor(col, bg); lid.setCursor(x, y); lid.print(s);
 }
+static void textAt(int x, int y, uint8_t size, uint16_t col, const char* s) { textAt(x, y, size, col, s, C_BG); }
 
-static void memoryLine(int y) {
-    char b[56];
-    snprintf(b, sizeof(b), "A %uK  B %uK  OS %uK  free %uK  POOL %d%%   ",
-             (unsigned)(samplerOwnerBytes(OWN_DECK_A) / 1024), (unsigned)(samplerOwnerBytes(OWN_DECK_B) / 1024),
-             (unsigned)(samplerOwnerBytes(OWN_ONESHOT) / 1024), (unsigned)(samplerFreeBytes() / 1024),
-             g_arenaCap ? (int)(g_arenaUsed * 100ull / g_arenaCap) : 0);
-    textAt(2, y, 1, C_DIM, b);
-}
-
-static void filterBars(int y, bool force) {
-    int cw = (int)(g_cutNow * 196.0f / 255.0f), rw = g_fx.reso * 48 / 127;
-    if (force) {
-        textAt(2, y + 2, 1, C_DIM, "CUTOFF");
-        lid.drawRect(44, y, 200, 12, C_BOX);
-        textAt(250, y + 2, 1, C_DIM, "Q");
-        lid.drawRect(262, y, 52, 12, C_BOX);
-        s_cutW = s_resW = -1;
-    }
-    if (cw != s_cutW) {
-        lid.fillRect(46, y + 2, cw, 8, C_FILT);
-        lid.fillRect(46 + cw, y + 2, 196 - cw, 8, C_BG);
-        s_cutW = cw;
-    }
-    if (rw != s_resW) {
-        lid.fillRect(264, y + 2, rw, 8, C_FILT);
-        lid.fillRect(264 + rw, y + 2, 48 - rw, 8, C_BG);
-        s_resW = rw;
-    }
-}
-
-// ---------- PATTERN: the loop page ----------
-#define WAVE_Y(d)  (22 + (d) * 78)
-#define WAVE_H     62          // the label strip sits under it
-
-static void waveColumn(uint8_t d, int x) {
-    const Deck& k = g_decks[d];
-    int y0 = WAVE_Y(d), mid = y0 + WAVE_H / 2;
-    lid.drawFastVLine(x, y0, WAVE_H, C_BG);
-    if (!deckLoaded(d)) return;
-    int hi = mid - k.ovMax[x] * (WAVE_H / 2 - 2) / 128, lo = mid - k.ovMin[x] * (WAVE_H / 2 - 2) / 128;
-    lid.drawFastVLine(x, hi, lo - hi + 1, d ? C_WAVEB : C_WAVE);
-    uint32_t len = g_samples[k.slot].length;
-    for (int s = 0; s < k.nSlices; s++)            // slice ticks along the top
-        if ((int)((uint64_t)k.slice[s] * LW / len) == x)
-            lid.drawFastVLine(x, y0, (s == k.lastSlice) ? WAVE_H : 9, (s == k.lastSlice) ? C_TEXT : C_TICK);
-    if ((int)((uint64_t)k.in * LW / len) == x || (int)((uint64_t)k.out * LW / len) == x)
-        lid.drawFastVLine(x, y0 + WAVE_H - 10, 10, C_FILT);     // IN / OUT brackets
-}
-
-static void stepCell(int i, bool playing) {
-    const Pattern& p = g_patterns[g_playing ? g_playPattern : g_curPattern];
-    uint8_t len = patLen(p);
-    int st = (g_lastStep / STEPS_PER_BAR) * STEPS_PER_BAR + i;
-    if (!g_playing) st = (g_curStep / STEPS_PER_BAR) * STEPS_PER_BAR + i;
-    if (st >= len) st = i;
-    int x = 2 + i * 20, y = 198;
-    lid.fillRect(x, y, 18, 18, playing ? C_BOX : C_BG);
-    lid.drawRect(x, y, 18, 18, (i % 4 == 0) ? C_TICK : C_BOX);
-    uint8_t m = p.drums[st];
-    if (m & 1)          lid.fillRect(x + 3, y + 11, 12, 4, C_HOT);               // kick
-    if (m & 2)          lid.fillRect(x + 3, y + 7, 12, 3, C_TEXT);               // clap
-    if (m & 0x0C)       lid.fillRect(x + 3, y + 3, 5, 3, C_DIM);                 // hats
-    if (CHOP_SLICE(p.chop[0][st])) lid.fillRect(x + 10, y + 3, 3, 3, C_WAVE);
-    if (CHOP_SLICE(p.chop[1][st])) lid.fillRect(x + 13, y + 3, 3, 3, C_WAVEB);
-    if (p.lockSet & (1u << st))    lid.drawFastHLine(x + 1, y + 16, 16, C_FILT);
-}
-
-static void patternStatic() {
-    lid.fillScreen(C_BG);
-    for (uint8_t d = 0; d < NUM_DECKS; d++) {
-        const Deck& k = g_decks[d];
-        for (int x = 0; x < LW; x++) waveColumn(d, x);
-        char b[56];
-        if (!deckLoaded(d)) snprintf(b, sizeof(b), "DECK %c  empty", 'A' + d);
-        else if (k.mode == DECK_CHOP) snprintf(b, sizeof(b), "%c CHOP %u  %.30s", 'A' + d, k.nSlices, k.name);
-        else if (k.fitBars) snprintf(b, sizeof(b), "%c LOOP %u bar  %.26s", 'A' + d, k.fitBars, k.name);
-        else snprintf(b, sizeof(b), "%c LOOP FIT?  %.28s", 'A' + d, k.name);
-        lid.setTextSize(1);
-        lid.setTextColor((g_curTrack == TRK_DECK_A + d) ? C_TEXT : C_DIM);
-        lid.setCursor(4, WAVE_Y(d) + WAVE_H + 3); lid.print(b);
-        s_headX[d] = -1;
-    }
-    filterBars(180, true);
-    for (int i = 0; i < STEPS_PER_BAR; i++) stepCell(i, false);
-    s_stepShown = -1;
-    memoryLine(226);
-}
-
-static void patternTitle() {
-    char b[40];
-    snprintf(b, sizeof(b), "%3ubpm SW%u PUMP%u %s  ", g_bpm, g_fx.swing, g_fx.pump, g_keyNames[g_fx.key % 12]);
-    textAt(2, 2, 2, C_TEXT, b);
-    lid.setTextSize(1); lid.setTextColor(g_recEnabled ? C_HEAD : C_DIM, C_BG);
-    lid.setCursor(292, 6); lid.print(g_playing ? (g_recEnabled ? "REC>" : " >  ") : (g_recEnabled ? "REC " : "    "));
-}
-
-static void patternDynamic() {
-    for (uint8_t d = 0; d < NUM_DECKS; d++) {
-        const Deck& k = g_decks[d];
-        int x = -1;
-        if (deckLoaded(d) && k.v[k.cur].active)
-            x = (int)((uint64_t)k.playFrame * LW / g_samples[k.slot].length);
-        if (x >= LW) x = LW - 1;
-        if (x != s_headX[d]) {
-            if (s_headX[d] >= 0) waveColumn(d, s_headX[d]);
-            if (x >= 0) lid.drawFastVLine(x, WAVE_Y(d), WAVE_H, C_HEAD);
-            s_headX[d] = x;
-        }
-    }
-    filterBars(180, false);
-    int st = g_playing ? (g_lastStep % STEPS_PER_BAR) : -1;
-    if (st != s_stepShown) {
-        if (s_stepShown >= 0) stepCell(s_stepShown, false);
-        if (st >= 0) stepCell(st, true);
-        s_stepShown = st;
-    }
-}
-
-// ---------- SOUND: big parameter + the filter curve ----------
-static void filterCurve() {
-    const int x0 = 0, y0 = 104, w = LW, h = 76;
-    lid.fillRect(x0, y0, w, h, C_BG);
-    lid.drawRect(x0, y0, w, h, C_BOX);
-    float fc = cutoffToHz(g_fx.cutoff);
-    float q  = 0.6f * powf(20.0f, (float)g_fx.reso / 127.0f);
-    int px = 0, py = 0;
-    for (int i = 0; i < 64; i++) {
-        float f = 40.0f * powf(11000.0f / 40.0f, (float)i / 63.0f);
-        float r = f / fc, r2 = r * r;
-        // 2-pole magnitude for the chosen type; the 24 dB slope is two stages (0.72, then q)
-        auto mag = [&](float qq) {
-            float den = sqrtf((1 - r2) * (1 - r2) + r2 / (qq * qq));
-            float num = g_fx.type == FLT_LP ? 1.0f : g_fx.type == FLT_HP ? r2 : r / qq;
-            return num / (den > 1e-6f ? den : 1e-6f);
-        };
-        float m = g_fx.poles ? mag(0.72f) * mag(q) : mag(q);
-        float db = 20.0f * log10f(m > 1e-5f ? m : 1e-5f);
-        int x = x0 + 2 + i * (w - 5) / 63;
-        int y = y0 + 22 - (int)(db * 1.1f);            // 0 dB sits 22 px down, +20 dB at the top
-        y = constrain(y, y0 + 1, y0 + h - 2);
-        if (i) lid.drawLine(px, py, x, y, C_FILT);
-        px = x; py = y;
-    }
-}
-
-static void soundStatic() {
-    lid.fillScreen(C_BG);
-    char name[24] = "", val[28] = "", title[24];
-    if (trackIsDeck(g_curTrack)) {
-        uint8_t d = trackDeck(g_curTrack);
-        snprintf(title, sizeof(title), "DECK %c", 'A' + d);
-        snprintf(name, sizeof(name), "%s", uiDeckRowName(g_soundParam));
-        uiDeckRowValue(d, g_soundParam, val, sizeof(val));
+// bottom strip, every page: hold bar > message / question > memory
+#define FOOT_Y 220
+static void footer() {
+    const char* st = uiStatusText();
+    int mode = (g_holdProg > 0.001f) ? 2 : st[0] ? 1 : 0;
+    char b[64];
+    uint32_t h = FNV0; HASH(h, mode);
+    int w = 0;
+    if (mode == 2) {
+        w = (int)(124.0f * (g_holdProg > 1.0f ? 1.0f : g_holdProg));
+        h = hashStr(h, g_holdLabel); HASH(h, w);
+    } else if (mode == 1) {
+        h = hashStr(h, st);
     } else {
-        if (g_curTrack == TRK_DRUMS) snprintf(title, sizeof(title), "DRUM LANE %u", g_curDrumLane + 1);
-        else                         snprintf(title, sizeof(title), "SYNTH %u", g_curTrack + 1);
-        uiSoundRowText(g_soundParam, name, sizeof(name), val, sizeof(val));
+        snprintf(b, sizeof(b), "A %uK  B %uK  OS %uK  free %uK  POOL %d%%   ",
+                 (unsigned)(samplerOwnerBytes(OWN_DECK_A) / 1024), (unsigned)(samplerOwnerBytes(OWN_DECK_B) / 1024),
+                 (unsigned)(samplerOwnerBytes(OWN_ONESHOT) / 1024), (unsigned)(samplerFreeBytes() / 1024),
+                 g_arenaCap ? (int)(g_arenaUsed * 100ull / g_arenaCap) : 0);
+        h = hashStr(h, b);
     }
-    textAt(2, 2, 2, C_DIM, title);
-    textAt(2, 28, 4, C_TEXT, name);                    // parameter name, ~32 px tall
-    textAt(2, 68, 3, C_FILT, val);
-    filterCurve();
-    filterBars(188, true);
-    memoryLine(226);
+    if (!stale(CI_FOOT, h)) return;
+    if (mode != s_footMode) { lid.fillRect(0, FOOT_Y, LW, LH - FOOT_Y, C_BG); s_footMode = mode; }
+    if (mode == 2) {
+        snprintf(b, sizeof(b), "%-15.15s", g_holdLabel);
+        textAt(2, FOOT_Y + 2, 2, C_TEXT, b);
+        lid.drawRect(188, FOOT_Y + 2, 128, 15, C_BOX);
+        lid.fillRect(190, FOOT_Y + 4, w, 11, C_FILT);
+        lid.fillRect(190 + w, FOOT_Y + 4, 124 - w, 11, C_BG);
+    } else if (mode == 1) {
+        snprintf(b, sizeof(b), "%-26.26s", st);
+        textAt(2, FOOT_Y + 2, 2, C_FILT, b);
+    } else {
+        textAt(2, FOOT_Y + 8, 1, C_DIM, b);
+    }
 }
 
-// ---------- SAMPLE: the browser, bigger ----------
-static void sampleStatic() {
-    lid.fillScreen(C_BG);
-    bool loops = uiBrowsingLoops();
-    textAt(2, 2, 2, C_TEXT, loops ? "LOOPS" : "SAMPLES");
-    int first = (g_fileSel > 4) ? g_fileSel - 4 : 0;
-    for (int i = first, y = 26; i < first + 9 && i < g_fileCount; i++, y += 20) {
-        char b[28]; snprintf(b, sizeof(b), "%.25s", g_fileList[i]);
-        textAt(2, y, 2, i == g_fileSel ? C_TEXT : C_DIM, b);
+// ---------- PATTERN: the grid ----------
+// Rows top to bottom: T1 T2 T3, deck A, deck B, the cutoff-lock lane, drum
+// lanes 8..1 (kick at the bottom). 16 steps = the bar the cursor is in.
+#define GX 16
+#define CW 19
+#define R_DECK 3
+#define R_LOCK 5
+#define R_DRUM 6
+#define GRID_N 14
+static int rowY(int r) { return r < R_DECK ? 20 + r * 16 : r < R_LOCK ? 68 + (r - R_DECK) * 14 : r == R_LOCK ? 96 : 104 + (r - R_DRUM) * 14; }
+static int rowH(int r) { return r < R_DECK ? 16 : r == R_LOCK ? 8 : 14; }
+static const char* const k_noteNames[] = {"--","C-","C#","D-","D#","E-","F-","F#","G-","G#","A-","A#","B-"};
+static const char  k_sliceChar[] = "123456789ABCDEFG";
+
+static void gridCell(int r, int c, const Pattern& p, int st, bool play, bool cur) {
+    const int x = GX + c * CW, y = rowY(r), w = CW - 1, h = rowH(r) - 1;
+    const bool beat = (c % 4 == 0);
+    uint32_t hs = FNV0; HASH(hs, play); HASH(hs, cur);
+    lid.setTextSize(1);
+
+    if (r < R_DECK) {                                   // synth note
+        const SynthCell& sc = p.synth[r][st];
+        bool mute = g_synthMute[r];
+        hs = fnv(hs, &sc, sizeof(sc)); HASH(hs, mute);
+        if (!stale(CI_CELL(r, c), hs)) return;
+        lid.fillRect(x, y, w, h, (sc.accent && !sc.empty()) ? C_ACC : play ? C_BOX : C_BG);
+        lid.drawRect(x, y, w, h, cur ? C_TEXT : beat ? C_TICK : C_BOX);
+        if (sc.empty()) return;
+        uint16_t col = mute ? C_DIM : C_SYN[r];
+        lid.setTextColor(col); lid.setCursor(x + 2, y + 4); lid.print(k_noteNames[sc.note[0] % 13]);
+        for (int n = 1; n < MAX_POLY; n++)              // chord: one dot per extra note
+            if (sc.note[n] != NOTE_EMPTY) lid.fillRect(x + w - 4, y + 2 + (n - 1) * 4, 2, 3, col);
+        if (sc.slide) lid.drawFastHLine(x + 2, y + h - 3, w - 4, C_FILT);
+
+    } else if (r < R_LOCK) {                            // chop
+        int d = r - R_DECK;
+        uint8_t v = p.chop[d][st], mode = g_decks[d].mode;
+        bool mute = g_decks[d].mute;
+        HASH(hs, v); HASH(hs, mute); HASH(hs, mode);
+        if (!stale(CI_CELL(r, c), hs)) return;
+        lid.fillRect(x, y, w, h, (CHOP_SLICE(v) && (v & CHOP_ACC)) ? C_ACC : play ? C_BOX : C_BG);
+        if (CHOP_SLICE(v)) {
+            lid.setTextColor(mute ? C_DIM : d ? C_WAVEB : C_WAVE);
+            lid.setCursor(x + 6, y + 3); lid.print(k_sliceChar[(CHOP_SLICE(v) - 1) & 15]);
+        } else lid.fillRect(x + 8, y + 6, 2, 2, beat ? C_TICK : C_BOX);
+        if (cur) lid.drawRect(x, y, w, h, C_TEXT);
+
+    } else if (r == R_LOCK) {                           // recorded cutoff: taller = more open
+        uint8_t v = (p.lockSet & (1u << st)) ? (uint8_t)(1 + p.lock[st] * 6 / 255) : 0;
+        HASH(hs, v);
+        if (!stale(CI_CELL(r, c), hs)) return;
+        lid.fillRect(x, y, w, h, play ? C_BOX : C_BG);
+        if (v) lid.fillRect(x + 1, y + h - v, w - 2, v, C_FILT);
+
+    } else {                                            // drum lane
+        int lane = GRID_N - 1 - r;
+        bool hit = p.drums[st] & (1 << lane), acc = p.drumAcc[st] & (1 << lane), mute = g_drumMute;
+        HASH(hs, hit); HASH(hs, acc); HASH(hs, mute);
+        if (!stale(CI_CELL(r, c), hs)) return;
+        lid.fillRect(x, y, w, h, play ? C_BOX : C_BG);
+        if (hit) lid.fillRect(x + 3, y + 3, w - 6, h - 6, mute ? C_DIM : play ? C_TEXT : acc ? C_FILT : C_HOT);
+        else     lid.fillRect(x + 8, y + 6, 2, 2, beat ? C_TICK : C_BOX);
+        if (cur) lid.drawRect(x, y, w, h, C_TEXT);
     }
-    if (!g_fileCount) textAt(2, 40, 1, C_DIM, loops ? "put .wav sections in /groovebox/loops" : "put .wav files in /groovebox/samples");
-    // arena as one bar: deck A | deck B | one-shots
-    lid.drawRect(0, 208, LW, 14, C_BOX);
-    if (g_arenaCap) {
-        int x = 2;
-        const uint16_t cols[3] = { C_WAVE, C_WAVEB, C_HOT };
-        const uint8_t own[3] = { OWN_DECK_A, OWN_DECK_B, OWN_ONESHOT };
-        for (int i = 0; i < 3; i++) {
-            int w = (int)((uint64_t)samplerOwnerBytes(own[i]) * (LW - 4) / g_arenaCap);
-            lid.fillRect(x, 210, w, 10, cols[i]); x += w;
+}
+
+// a deck in LOOP mode has no steps to edit: the row says what is running
+static void loopRow(int r, int d, bool sel, int curCol) {
+    const Deck& k = g_decks[d];
+    uint32_t hs = FNV0 ^ 0xA5;
+    HASH(hs, k.fitBars); HASH(hs, k.mute); HASH(hs, sel); HASH(hs, curCol);
+    hs = fnv(hs, k.name, sizeof(k.name));
+    if (!stale(CI_CELL(r, 0), hs)) return;
+    for (int c = 1; c < 16; c++) s_cache[CI_CELL(r, c)] = 0;      // step cells come back when it is CHOP again
+    const int y = rowY(r), w = 16 * CW - 1, h = rowH(r) - 1;
+    char b[52];
+    if (k.fitBars) snprintf(b, sizeof(b), "LOOP %u BAR  %.34s", k.fitBars, k.name);
+    else           snprintf(b, sizeof(b), "LOOP FIT?  %.36s", k.name);
+    lid.fillRect(GX, y, w, h, C_BG);
+    lid.drawRect(GX, y, w, h, C_BOX);
+    lid.setTextSize(1); lid.setTextColor(k.mute ? C_DIM : d ? C_WAVEB : C_WAVE);
+    lid.setCursor(GX + 4, y + 3); lid.print(b);
+    if (sel) lid.drawRect(GX + curCol * CW, y, CW - 1, h, C_TEXT);
+}
+
+static void patternDraw() {
+    const Pattern& p = g_patterns[g_curPattern];
+    const uint8_t len = patLen(p), last = g_lastStep;
+    const int base = (g_curStep / STEPS_PER_BAR) * STEPS_PER_BAR;
+    const bool playing = g_playing, here = playing && g_playPattern == g_curPattern;
+    const int playCol = (here && last >= base && last < base + STEPS_PER_BAR) ? last - base : -1;
+    const int curCol = g_curStep - base;
+
+    char b[40], t[8];
+    if (len == NUM_STEPS) snprintf(t, sizeof(t), "PT%u.%u", g_curPattern + 1, base / STEPS_PER_BAR + 1);
+    else                  snprintf(t, sizeof(t), "PT%u", g_curPattern + 1);
+    snprintf(b, sizeof(b), "%-6s%3ubpm %-2s %s", t, g_bpm, g_keyNames[g_fx.key % 12], g_songMode ? "SNG" : "   ");
+    uint32_t h = hashStr(FNV0, b); HASH(h, playing); HASH(h, g_recEnabled);
+    if (stale(CI_TITLE, h)) {
+        textAt(2, 2, 2, C_TEXT, b);
+        textAt(268, 2, 2, g_recEnabled ? C_HEAD : C_WAVEB,
+               playing ? (g_recEnabled ? "REC>" : "  > ") : (g_recEnabled ? "REC " : "    "));
+    }
+
+    for (int r = 0; r < GRID_N; r++) {
+        char lab[2] = { 0, 0 };
+        uint16_t lc = C_DIM;
+        bool sel = false;
+        if (r < R_DECK)      { sel = (g_curTrack == r); lab[0] = (char)('1' + r);
+                               lc = g_synthMute[r] ? C_BOX : sel ? C_TEXT : C_SYN[r]; }
+        else if (r < R_LOCK) { int d = r - R_DECK; sel = (g_curTrack == TRK_DECK_A + d); lab[0] = (char)('A' + d);
+                               lc = g_decks[d].mute ? C_BOX : sel ? C_TEXT : d ? C_WAVEB : C_WAVE; }
+        else if (r == R_LOCK){ lab[0] = 'f'; lc = C_TICK; }
+        else                 { int lane = GRID_N - 1 - r; sel = (g_curTrack == TRK_DRUMS && g_curDrumLane == lane);
+                               lab[0] = (char)('1' + lane); lc = g_drumMute ? C_BOX : sel ? C_TEXT : C_HOT; }
+        h = FNV0; HASH(h, lab[0]); HASH(h, lc);
+        if (stale(CI_LABEL(r), h)) textAt(4, rowY(r) + (rowH(r) - 8) / 2, 1, lc, lab);
+
+        if (r >= R_DECK && r < R_LOCK && deckLoaded(r - R_DECK) && g_decks[r - R_DECK].mode == DECK_LOOP) {
+            loopRow(r, r - R_DECK, sel, curCol);
+            continue;
+        }
+        for (int c = 0; c < STEPS_PER_BAR; c++) {
+            int st = base + c;
+            if (st >= len) st = c;
+            gridCell(r, c, p, st, c == playCol, sel && c == curCol);
         }
     }
-    memoryLine(226);
+}
+
+// ---------- SETTINGS: the list ----------
+#define LIST_Y 24
+#define LIST_PITCH 19
+static void listRow(int i, const char* left, uint16_t lc, const char* right, uint16_t rc, uint16_t bg) {
+    int y = LIST_Y + i * LIST_PITCH;
+    lid.fillRect(0, y, LW, 1, bg);
+    lid.fillRect(0, y + 17, LW, 2, bg);
+    lid.fillRect(0, y + 1, 2, 16, bg);
+    textAt(2, y + 1, 2, lc, left, bg);
+    if (right) textAt(2 + 12 * (int)strlen(left), y + 1, 2, rc, right, bg);
+    int end = 2 + 12 * (int)(strlen(left) + (right ? strlen(right) : 0));
+    if (end < LW) lid.fillRect(end, y + 1, LW - end, 16, bg);
+}
+
+static void settingsDraw() {
+    char name[24], val[28], t[24], l[16], v[20], b[40];
+    int rows = uiRowCount(), sel = (g_soundParam < rows) ? g_soundParam : 0;
+    int first = constrain(sel - 4, 0, max(0, rows - 10));
+    uiTrackTitle(t, sizeof(t));
+    snprintf(b, sizeof(b), "%-13.13s %3ubpm %2d/%-2d", t, g_bpm, sel + 1, rows);
+    if (stale(CI_TITLE, hashStr(FNV0, b))) textAt(2, 2, 2, C_TEXT, b);
+
+    for (int i = 0; i < 10; i++) {
+        int r = first + i;
+        uint32_t h = FNV0; HASH(h, r);
+        if (r >= rows) { if (stale(i, h ^ 0x5A)) lid.fillRect(0, LIST_Y + i * LIST_PITCH, LW, LIST_PITCH, C_BG); continue; }
+        uint8_t dr = uiRowDeckRow((uint8_t)r);
+        bool shared = (dr >= DR_SHARED_FIRST && dr < DR_COUNT), on = (r == sel);
+        uiRowText((uint8_t)r, name, sizeof(name), val, sizeof(val));
+        h = hashStr(hashStr(h, name), val); HASH(h, on);
+        if (!stale(i, h)) continue;
+        snprintf(l, sizeof(l), "%c%-9.9s ", on ? '>' : ' ', name);
+        snprintf(v, sizeof(v), "%-15.15s", val);
+        listRow(i, l, on ? C_TEXT : shared ? C_FILT : C_DIM, v, on ? C_TEXT : C_DIM, on ? C_BOX : C_BG);
+    }
+}
+
+// ---------- SAMPLE: the browser ----------
+static void sampleDraw() {
+    char b[40];
+    bool loops = uiBrowsingLoops();
+    if (loops) snprintf(b, sizeof(b), "LOOPS > DECK %c            ", 'A' + trackDeck(g_curTrack));
+    else       snprintf(b, sizeof(b), "SAMPLES > DRUM LANES      ");
+    if (stale(CI_TITLE, hashStr(FNV0, b))) textAt(2, 2, 2, C_TEXT, b);
+
+    int first = (g_fileSel > 4) ? g_fileSel - 4 : 0;
+    for (int i = 0; i < 9; i++) {
+        int idx = first + i;
+        const char* s = "";
+        if (idx < g_fileCount)        s = g_fileList[idx];
+        else if (!g_fileCount && !i)  s = "no .wav files in";
+        else if (!g_fileCount && i == 1) s = loops ? DIR_LOOPS : DIR_SAMPLES;
+        bool on = (idx < g_fileCount && idx == g_fileSel);
+        uint32_t h = hashStr(FNV0, s); HASH(h, on);
+        if (!stale(i, h)) continue;
+        snprintf(b, sizeof(b), "%c%-25.25s", on ? '>' : ' ', s);
+        listRow(i, b, on ? C_TEXT : C_DIM, nullptr, 0, on ? C_BOX : C_BG);
+    }
+
+    // arena as one bar: deck A | deck B | one-shots
+    const uint8_t own[3] = { OWN_DECK_A, OWN_DECK_B, OWN_ONESHOT };
+    int w[3];
+    uint32_t h = FNV0;
+    for (int i = 0; i < 3; i++) {
+        w[i] = g_arenaCap ? (int)((uint64_t)samplerOwnerBytes(own[i]) * (LW - 4) / g_arenaCap) : 0;
+        HASH(h, w[i]);
+    }
+    if (stale(20, h)) {
+        const uint16_t cols[3] = { C_WAVE, C_WAVEB, C_HOT };
+        lid.drawRect(0, 202, LW, 12, C_BOX);
+        int x = 2;
+        for (int i = 0; i < 3; i++) { lid.fillRect(x, 204, w[i], 8, cols[i]); x += w[i]; }
+        if (x < LW - 2) lid.fillRect(x, 204, LW - 2 - x, 8, C_BG);
+    }
 }
 
 // ---------- SONG: the arrangement at a glance ----------
-static void songStatic() {
-    lid.fillScreen(C_BG);
-    char b[40];
-    snprintf(b, sizeof(b), "SONG %s  P%u", g_songMode ? "ON" : "off", g_curProject + 1);
-    textAt(2, 2, 2, C_TEXT, b);
+static void songDraw() {
+    char b[40], t[12];
+    const SongSlot& cs = g_song[g_songCursor];
+    if (cs.pattern == SONG_EMPTY) snprintf(t, sizeof(t), "%u:--", g_songCursor + 1);
+    else                          snprintf(t, sizeof(t), "%u:P%u x%u", g_songCursor + 1, cs.pattern + 1, cs.repeats);
+    snprintf(b, sizeof(b), "SONG %-3s P%u  %-14s", g_songMode ? "ON" : "off", g_curProject + 1, t);
+    if (stale(CI_TITLE, hashStr(FNV0, b))) textAt(2, 2, 2, C_TEXT, b);
+
+    const bool playing = g_songMode && g_playing;
+    const uint8_t pos = g_songPos;
     for (int i = 0; i < SONG_LENGTH; i++) {
         const SongSlot& sl = g_song[i];
+        bool play = playing && i == pos, cur = (i == g_songCursor), loop = (i == g_songLoopStart);
+        uint32_t h = fnv(FNV0, &sl, sizeof(sl)); HASH(h, play); HASH(h, cur); HASH(h, loop);
+        if (!stale(i, h)) continue;
         int x = (i % 16) * 20, y = 24 + (i / 16) * 48;
-        bool play = g_songMode && g_playing && i == g_songPos;
-        lid.drawRect(x, y, 19, 46, i == g_songCursor ? C_TEXT : (play ? C_HEAD : C_BOX));
-        if (i == g_songLoopStart) lid.drawFastVLine(x + 1, y + 1, 44, C_FILT);
+        lid.fillRect(x, y, 19, 46, C_BG);
+        lid.drawRect(x, y, 19, 46, cur ? C_TEXT : (play ? C_HEAD : C_BOX));
+        if (loop) lid.drawFastVLine(x + 1, y + 1, 44, C_FILT);
         if (sl.pattern == SONG_EMPTY) continue;
         lid.setTextSize(2); lid.setTextColor(play ? C_HEAD : C_TEXT); lid.setCursor(x + 4, y + 3);
         lid.print(sl.pattern + 1);
         if (sl.repeats > 1) { lid.setTextSize(1); lid.setTextColor(C_DIM); lid.setCursor(x + 3, y + 20); lid.printf("x%u", sl.repeats); }
         if (sl.target != TARGET_NONE) {                 // cutoff column: shut -> open reads left to right
-            int h = 1 + sl.target * 12 / 254;
-            lid.fillRect(x + 3, y + 43 - h, 13, h, C_FILT);
+            int hh = 1 + sl.target * 12 / 254;
+            lid.fillRect(x + 3, y + 43 - hh, 13, hh, C_FILT);
         }
         for (int m = 0; m < SLOT_MUTE_BITS; m++)
             if (sl.mute & (1 << m)) lid.fillRect(x + 2 + m * 2, y + 29, 2, 2, C_HOT);
     }
-    textAt(2, 219, 1, C_DIM, "e/u filter   tab/p repeats   hold AUX = bounce to SD");
-    textAt(2, 230, 1, C_DIM, "mutes: fn sft a s d f g = T1 T2 T3 DRUMS A B KICK");
-}
-
-// ---------- HELP: the six steps, large ----------
-static void helpStatic() {
-    lid.fillScreen(C_BG);
-    lid.setFont(&fonts::Font2); lid.setTextSize(1);
-    for (int i = 0, y = 4; i < (int)HELP_STEP_LINES; i++, y += 18) {
-        lid.setTextColor(g_helpSteps[i][0] != ' ' ? C_TEXT : C_DIM, C_BG);
-        lid.setCursor(4, y); lid.print(g_helpSteps[i]);
-    }
-    lid.setFont(&fonts::Font0);
-    char b[56];
-    snprintf(b, sizeof(b), "lane 1 pumps the loop    heap %uK  arena %uK", (unsigned)(ESP.getFreeHeap() / 1024), (unsigned)(g_arenaCap / 1024));
-    textAt(4, 228, 1, C_FILT, b);
 }
 
 // ---------- KEY MAP: the keyboard, labelled for where you are ----------
@@ -412,8 +476,9 @@ static void keyLegend(uint8_t kc, char* o) {
 // what the key does right now (<= 3 chars) and its group colour; "" = nothing here
 static uint16_t keyFunction(uint8_t kc, char* o) {
     o[0] = 0;
-    bool play = (g_curPage == PAGE_PATTERN || g_curPage == PAGE_SOUND);
-    if (pianoSemi(kc) >= 0 && (play || g_curPage == PAGE_SONG)) {       // same priority as input.cpp
+    bool play = (g_curPage == PAGE_PATTERN || g_curPage == PAGE_SETTINGS);
+    bool song = (g_curPage == PAGE_SONG);
+    if (pianoSemi(kc) >= 0 && (play || song)) {                         // same priority as input.cpp
         if (g_curPage == PAGE_SONG) {
             static const char* const m[7] = { "T1", "T2", "T3", "DR", "A", "B", "KIK" };
             int8_t b = padSlotMute(kc);
@@ -434,20 +499,17 @@ static uint16_t keyFunction(uint8_t kc, char* o) {
         if (g_curPage == PAGE_SAMPLE) {
             if (!uiBrowsingLoops()) snprintf(o, 4, "L%d", k + 1);
             else if (k < NUM_DECKS) snprintf(o, 4, "%c", 'A' + k);
-        } else if (g_curPage == PAGE_HELP) {
-            if (k < STYLE_COUNT) snprintf(o, 4, "ST%d", k + 1);
         } else snprintf(o, 4, "P%d", k + 1);
         return C_WAVEB;
     }
     const char* s = ""; uint16_t c = C_WAVE;
-    bool song = (g_curPage == PAGE_SONG);
     switch (a) {
         case ACT_TRACKD: s = "TD";  c = C_TEXT; break;
         case ACT_LOAD:   s = "LD";  c = C_DIM;  break;
         case ACT_SAVE:   s = "SV";  c = C_DIM;  break;
         case ACT_PAGE:   s = "PG";  c = C_DIM;  break;
-        case ACT_BPM_DN: s = "BP-"; c = C_DIM;  break;
-        case ACT_BPM_UP: s = "BP+"; c = C_DIM;  break;
+        case ACT_OCT_DN: s = song ? "PJ-" : "OC-"; c = C_DIM;  break;
+        case ACT_OCT_UP: s = song ? "PJ+" : "OC+"; c = C_DIM;  break;
         case ACT_CUT_DN: s = "CT-"; c = C_FILT; break;
         case ACT_CUT_UP: s = "CT+"; c = C_FILT; break;
         case ACT_RES_DN: s = song ? "RP-" : "RS-"; c = C_FILT; break;
@@ -471,12 +533,12 @@ static uint16_t keyFunction(uint8_t kc, char* o) {
 
 static void keysStatic() {
     lid.fillScreen(C_BG);
-    static const char* const pages[] = { "PATTERN", "SOUND", "SAMPLE", "SONG", "HELP" };
+    static const char* const pages[] = { "PATTERN", "SETTINGS", "SAMPLE", "SONG" };
     char b[64], trk[12];
     if (g_curTrack == TRK_DRUMS)        strcpy(trk, "DRUMS");
     else if (trackIsDeck(g_curTrack))   snprintf(trk, sizeof(trk), "DECK %c", 'A' + trackDeck(g_curTrack));
     else                                snprintf(trk, sizeof(trk), "SYNTH T%d", g_curTrack + 1);
-    snprintf(b, sizeof(b), "KEY MAP  %s page  %s", pages[g_curPage % 5], trk);
+    snprintf(b, sizeof(b), "KEY MAP  %s page  %s", pages[g_curPage % PAGE_COUNT], trk);
     textAt(4, 2, 1, C_TEXT, b);
     textAt(LW - 6 * 14 - 2, 2, 1, C_DIM, "release = back");
 
@@ -498,7 +560,7 @@ static void keysStatic() {
 
     // the legend: one line per colour, in words
     const char* ln[8]; uint16_t lc[8];
-    bool play = (g_curPage == PAGE_PATTERN || g_curPage == PAGE_SOUND);
+    bool play = (g_curPage == PAGE_PATTERN || g_curPage == PAGE_SETTINGS);
     char pads[48];
     lc[0] = C_TEXT;  ln[0] = "T1 T2 T3 track, TD drums>A>B.  Hold: mute";
     lc[1] = C_WAVEB;
@@ -506,7 +568,6 @@ static void keysStatic() {
         case PAGE_SAMPLE: ln[1] = uiBrowsingLoops() ? "A B: load this loop into deck A or B"
                                                     : "L1-L8: put this sample on a drum lane"; break;
         case PAGE_SONG:   ln[1] = "P1-P8: place that pattern in the slot"; break;
-        case PAGE_HELP:   ln[1] = "ST1-ST4: style.  Hold: replace my drums"; break;
         default:          ln[1] = "P1-P8 pattern.  Hold: clone into it"; break;
     }
     lc[2] = C_FILT;
@@ -514,23 +575,24 @@ static void keysStatic() {
                                      : "CT cutoff   RS resonance.  Hold: sweep";
     lc[3] = C_HOT;
     if (g_curPage == PAGE_SONG)        ln[3] = "Mutes for this slot (KIK = kick only)";
-    else if (!play)                    ln[3] = "Pads and notes play on PATTERN and SOUND";
+    else if (!play)                    ln[3] = "Pads, notes play on PATTERN and SETTINGS";
     else if (g_curTrack == TRK_DRUMS)  ln[3] = "1-8 drum lanes, 1 = kick.  ACC: accent";
     else if (trackIsDeck(g_curTrack)) {
         snprintf(pads, sizeof(pads), "1-16 chops of deck %c.  ACC: accent", 'A' + trackDeck(g_curTrack));
         ln[3] = pads;
-    } else                             ln[3] = "Notes.  ACC: accent.  Hold BP: octave";
-    lc[4] = C_WAVE;  ln[4] = "< v ^ > cursor.  Hold: PLY top, CLR all";
+    } else                             ln[3] = "Notes.  ACC: accent.  OC: octave";
+    lc[4] = C_WAVE;
+    ln[4] = (g_curPage == PAGE_SETTINGS) ? "^ v pick a row, < > change it. BPM: a row"
+                                         : "< v ^ > cursor.  Hold: PLY top, CLR all";
     lc[5] = C_DIM;
-    ln[5] = (g_curPage == PAGE_SONG) ? "PG next page.  BP tempo (hold: project)"
-                                     : "PG next page (hold: PATTERN).  BP tempo";
-    lc[6] = C_DIM;   ln[6] = "Hold LD load, SV save.  Both: demo";
+    ln[5] = (g_curPage == PAGE_SONG) ? "PG next page.  PJ project for LD / SV"
+                                     : "PG next page (hold: PATTERN). OC octave";
+    lc[6] = C_DIM;   ln[6] = "Hold LD or SV, then again = yes. Both: demo";
     lc[7] = C_HEAD;
     switch (g_curPage) {
         case PAGE_SAMPLE: ln[7] = uiBrowsingLoops() ? "AUX load into the deck.  SNG song mode"
                                                     : "AUX hear the sample.  SNG song mode"; break;
         case PAGE_SONG:   ln[7] = "AUX loop start (hold: bounce).  SNG song"; break;
-        case PAGE_HELP:   ln[7] = "AUX lid on/off.  SNG song mode"; break;
         default:          ln[7] = "Hold: SNG resample, SLD bass, AUX mic"; break;
     }
     lid.setFont(&fonts::Font2); lid.setTextWrap(false);
@@ -542,53 +604,6 @@ static void keysStatic() {
 }
 
 // ---------- update ----------
-static uint32_t staticHash() {
-    uint32_t h = 2166136261u;
-    HASH(h, g_curPage); HASH(h, g_curTrack);
-    switch (g_curPage) {
-        case PAGE_PATTERN: {
-            for (int d = 0; d < NUM_DECKS; d++) {
-                const Deck& k = g_decks[d];
-                HASH(h, k.slot); HASH(h, k.mode); HASH(h, k.nSlices); HASH(h, k.fitBars);
-                HASH(h, k.in); HASH(h, k.out); HASH(h, k.lastSlice);
-                h = fnv(h, k.slice, sizeof(k.slice)); h = fnv(h, k.name, 8);
-            }
-            uint8_t pat = g_playing ? g_playPattern : g_curPattern, bar = (g_playing ? g_lastStep : g_curStep) / STEPS_PER_BAR;
-            const Pattern& p = g_patterns[pat];
-            HASH(h, pat); HASH(h, bar); HASH(h, p.lockSet);
-            h = fnv(h, p.drums, NUM_STEPS); h = fnv(h, p.chop, sizeof(p.chop));
-            HASH(h, g_arenaUsed);
-            break;
-        }
-        case PAGE_SOUND:
-            HASH(h, g_soundParam); HASH(h, g_curDrumLane); HASH(h, g_fx); HASH(h, g_bpm);
-            if (!trackIsDeck(g_curTrack)) {      // synth / drum values are plain text: hash that
-                char nm[24], vl[28]; uiSoundRowText(g_soundParam, nm, sizeof(nm), vl, sizeof(vl));
-                h = fnv(h, vl, strlen(vl));
-            }
-            if (trackIsDeck(g_curTrack)) {
-                const Deck& k = g_decks[trackDeck(g_curTrack)];
-                HASH(h, k.mode); HASH(h, k.sliceMode); HASH(h, k.nSlices); HASH(h, k.fitBars); HASH(h, k.pitch);
-                HASH(h, k.level); HASH(h, k.in); HASH(h, k.out); HASH(h, k.startTenths); HASH(h, k.qual);
-                HASH(h, k.lastSlice); h = fnv(h, k.slice, sizeof(k.slice));
-                uint8_t pl = patLen(g_patterns[g_curPattern]); HASH(h, pl);
-            }
-            break;
-        case PAGE_SAMPLE:
-            HASH(h, g_fileSel); HASH(h, g_fileCount); HASH(h, g_arenaUsed);
-            { bool l = uiBrowsingLoops(); HASH(h, l); }
-            break;
-        case PAGE_SONG: {
-            h = fnv(h, g_song, sizeof(g_song));
-            HASH(h, g_songCursor); HASH(h, g_songLoopStart); HASH(h, g_songMode); HASH(h, g_curProject);
-            uint8_t pos = g_playing ? g_songPos : 255; HASH(h, pos);
-            break;
-        }
-        default: break;
-    }
-    return h;
-}
-
 void lidUpdate(bool force) {
     if (!g_lidOk) return;                       // shut or absent: draw nothing, spend nothing
     uint32_t now = millis();
@@ -596,39 +611,28 @@ void lidUpdate(bool force) {
     if (!force && !edge && now - s_lastMs < 60) return;
     s_lastMs = now;
 
+    lid.startWrite();
     if (g_keysOverlay) {
-        uint32_t k = 2166136261u;
+        uint32_t k = FNV0;
         HASH(k, g_curPage); HASH(k, g_curTrack);
         { bool l = uiBrowsingLoops(); HASH(k, l); }
-        if (s_page != PAGE_KEYS || k != s_staticHash) {
-            s_staticHash = k; s_page = PAGE_KEYS;
-            lid.startWrite(); keysStatic(); lid.endWrite();
-        }
+        if (s_page != PAGE_KEYS || k != s_keysHash) { s_keysHash = k; s_page = PAGE_KEYS; keysStatic(); }
+        lid.endWrite();
         return;
     }
-
-    uint32_t h = staticHash();
-    bool repaint = (h != s_staticHash) || (s_page != (int)g_curPage);
-    lid.startWrite();
-    if (repaint) {
-        s_staticHash = h; s_page = g_curPage; s_titleHash = 0;
-        switch (g_curPage) {
-            case PAGE_PATTERN: patternStatic(); break;
-            case PAGE_SOUND:   soundStatic();   break;
-            case PAGE_SAMPLE:  sampleStatic();  break;
-            case PAGE_SONG:    songStatic();    break;
-            default:           helpStatic();    break;
-        }
+    if (s_page != (int)g_curPage) {             // a new page: the one time the panel is cleared
+        s_page = g_curPage;
+        lid.fillScreen(C_BG);
+        memset(s_cache, 0, sizeof(s_cache));
+        s_footMode = -1;
     }
-    if (g_curPage == PAGE_PATTERN) {
-        uint32_t t = 2166136261u;
-        HASH(t, g_bpm); HASH(t, g_fx.swing); HASH(t, g_fx.pump); HASH(t, g_fx.key);
-        bool pl = g_playing; HASH(t, pl); HASH(t, g_recEnabled);
-        if (t != s_titleHash) { s_titleHash = t; patternTitle(); }
-        patternDynamic();
-    } else if (g_curPage == PAGE_SOUND) {
-        filterBars(188, false);
+    switch (g_curPage) {
+        case PAGE_PATTERN:  patternDraw();  break;
+        case PAGE_SETTINGS: settingsDraw(); break;
+        case PAGE_SAMPLE:   sampleDraw();   break;
+        default:            songDraw();     break;
     }
+    footer();
     lid.endWrite();
 }
 #endif

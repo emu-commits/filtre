@@ -1,8 +1,9 @@
 // ============================================================
 // FILTRE - lid_ui.h
 // The TERM512 lid: ST7789 2.8", 320x240, on the SD card's SPI bus.
-// It is a lens on the internal page (waveforms, filter, song), never
-// a second app: with the lid shut or absent the instrument is whole.
+// With the lid open it is the editor (pattern grid, settings list, browser,
+// song) and the internal screen is the lens beside it. With the lid shut or
+// absent the internal screen is the editor: the instrument is still whole.
 // ============================================================
 #pragma once
 #include "config.h"

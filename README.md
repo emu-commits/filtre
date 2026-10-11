@@ -96,8 +96,8 @@ Print files, keycap label sheet (v6), and assembly guide:
 the note keys are a piano (whites on the home row, sharps above, E–F/B–C gaps dead),
 and the first eight white keys become pads 1–8 when the drum track is selected.
 Orange = the hold (0.5 s) function; green = the sampling holds. `AUX` held samples
-the mic, `SONG` held while playing resamples the mix. The HELP page shows this map
-on the device; the [manual](docs/USER_MANUAL.md) explains every key.
+the mic, `SONG` held while playing resamples the mix. That picture is upstream Microgroove; FILTRE moves
+several keys. Hold `ok` for the current map on the lid, or read the [FILTRE guide](docs/USER-GUIDE.md).
 
 ## Architecture
 

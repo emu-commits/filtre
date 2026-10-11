@@ -49,17 +49,27 @@ T2, T3 synths ──────────────────────
 
 ## Keys
 
-Everything Microgroove binds is unchanged. Additions:
+The single source is `keymap.h`. Where FILTRE differs from Microgroove:
 
 | Key | Short | Hold 0.5 s |
 |---|---|---|
 | `e` / `u` | cutoff down / up (hold to sweep) | |
 | `tab` / `p` | resonance down / up | |
 | **TD** (`3`) | drums → deck A → deck B | mute whichever it is on |
-| **SLD** (`,`) | slide at cursor | write bass in KEY |
-| **AUX** (`.`) | SAMPLE: preview / load loop | mic record to the lane or deck |
+| `,` `.` `;` `/` | arrows left, down, up, right, as printed on the keys | |
+| **SLD** (`x`) | slide at cursor | write bass in KEY |
+| **AUX** (`c`) | SAMPLE: preview / load loop | mic record to the lane or deck |
+| **REC** (`v`) | live record on / off | |
+| `opt` / `alt` | octave down / up; SONG page: project slot | (no hold function) |
+| **LOAD** (`=`) / **SAVE** (`del`) | which slot | asks "Are you sure?"; the same key again does it |
 | **enter** (`ok`) | | while held, the lid shows the key map for the current page and track |
 | **SONG** (`n`) | song mode | resample: a pad (1.9 s), or one bar-exact pattern onto the focused deck |
+
+Tempo has no key: it is the BPM row on SETTINGS. The piano stops at `l` / `[`
+because `;` is the up arrow. `b`, `'`, `]` and `\` are unbound.
+
+There is no HELP page. Holding `ok` draws the keyboard on the lid from
+`keymap.h`'s own lookups, so the on-device help cannot go stale.
 
 Deck focused: slices 1–8 on `fn sft a s d f g h`, 9–16 on `q w r t y i o [`.
 Hold **ACC** (`m`) for an accented hit.
@@ -71,14 +81,33 @@ SONG page: **P1–P8** place a pattern, `e`/`u` set the slot's filter target
 (below zero = none), `tab`/`p` set repeats 1–16, `fn sft a s d f g` toggle the
 slot's mutes for T1 T2 T3 DRUMS A B KICK, hold **AUX** = bounce.
 
-HELP page: **P1–P4** recall a style (FILTRE, NU-DISCO, HOMEWORK, BANGER). A
-style never unloads audio; if you have edited the drums yourself it wants a hold.
-**AUX** toggles the lid.
+SETTINGS page lists the focused track's own rows, then one shared block in
+amber that is the same for every track: BPM, SWING, KEY, BASSMODE, STYLE,
+LENGTH, BLEND, CUTOFF, RESO, TYPE, SLOPE, PUMP, RELEASE, BASS PUMP, GHOST, LID.
+A deck's own rows are MODE, SLICES, SLICE POS, PITCH, LEVEL, FIT, IN, OUT,
+START, QUALITY, BPM<LOOP. STYLE never unloads audio; if you have edited the
+drums yourself it asks first and the same arrow again confirms.
 
-SOUND page with a deck focused lists the deck's rows (MODE, SLICES, PITCH,
-LEVEL, FIT), then the shared rows in amber (BLEND, CUTOFF, RESO, TYPE, SLOPE,
-PUMP, RELEASE, BASS PUMP, GHOST, SWING, KEY, BASSMODE, STYLE, LENGTH), then
-SLICE POS, IN, OUT, START, QUALITY, BPM<LOOP.
+## Two screens
+
+With the lid open the lid is the editor and the internal screen is the lens:
+
+| Page | Lid (320x240) | Internal (240x135) |
+|---|---|---|
+| PATTERN | the grid: T1-T3, deck A/B chops, cutoff locks, 8 drum lanes | both deck waveforms with slices, IN/OUT and playheads |
+| SETTINGS | the scrolling list | the selected row in large type, plus the waveform, the filter curve or the scope |
+| SAMPLE | the file list and the arena bar | the same list, with what is loaded where |
+| SONG | all 64 slots | the same, with the slot under the cursor in words |
+
+Messages, questions and the hold bar are on the bottom line of both. With the
+lid off or absent (`-nolid` build, or the LID row) the internal screen draws
+the grid and the list itself.
+
+The lid has no framebuffer and is never cleared while a page is up: each grid
+cell, list row and song slot keeps a hash of what it last drew and is redrawn
+only when that changes. (Repainting the whole panel on every pad hit was a
+visible blink and kept the main loop away from the keyboard for the length of
+the repaint.)
 
 ## Samples and memory
 

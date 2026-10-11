@@ -7,6 +7,12 @@ Key by key. Key names are what is printed on the Cardputer: `Aa` is shift,
 second; a bar fills in the footer and names what the hold will do. Let go
 before the bar fills and you get the tap instead.
 
+**Two screens.** With the lid open, the big lid screen is where you edit: the
+pattern grid, the settings list, the file browser, the song. The small screen
+shows what goes with it: both deck waveforms on PATTERN, the selected setting
+in large type on SETTINGS. Messages and questions appear at the bottom of
+both. With no lid the small screen is the editor.
+
 ## The keyboard at a glance
 
 ```
@@ -18,31 +24,31 @@ RES-         CUT-            CUT+            RES+
      └── black keys / chops 9-16 ──┘
 
  fn  Aa  a   s   d   f   g   h   j   k   l   ;   '   ok
- └──── pads 1-8 / chops 1-8 ────┘   (white keys continue)  KEY MAP
+ └──── pads 1-8 / chops 1-8 ────┘  (white keys)  ▲       KEY MAP
 
 ctrl opt alt  z   x   c   v   b   n    m    ,    .    /    space
-PAGE BPM- BPM+ CLR ◄   ▼   ▲   ►  SONG ACC  SLD  AUX  REC  PLAY
+PAGE OCT- OCT+ CLR SLD AUX REC     SONG ACC  ◄    ▼    ►    PLAY
 ```
 
 | Key | Tap | Hold |
 |---|---|---|
 | `space` | play / stop | play from the top |
 | `ctrl` | next page | jump to PATTERN page |
-| `/` | record on / off | |
-| `x` `c` `v` `b` | left, down, up, right | repeats |
+| `v` | record on / off | |
+| `,` `.` `;` `/` | left, down, up, right: the arrows printed on the keys | repeats |
 | `z` | clear the step under the cursor | clear the whole pattern |
 | `m` | (nothing alone) accent while held | |
 | `` ` `` `1` `2` | select synth track T1, T2, T3 | mute that track |
 | `3` | drums → deck A → deck B → drums | mute whichever it is on |
 | `4` … `-` | select pattern 1 … 8 | copy current pattern there |
-| `opt` / `alt` | tempo −1 / +1 | octave down / up |
+| `opt` / `alt` | octave down / up (SONG page: project slot) | |
 | `e` / `u` | filter cutoff down / up | sweeps while held |
 | `tab` / `p` | resonance down / up | sweeps while held |
-| `,` | slide on the note under the cursor | write a bass line |
-| `.` | (depends on page) | record from the mic |
+| `x` | slide on the note under the cursor | write a bass line |
+| `c` | (depends on page) | record from the mic |
 | `n` | song mode on / off | resample (while playing) |
-| `=` | show which project slot | load project |
-| `del` | show which project slot | save project |
+| `=` | show which project slot | asks **LOAD: Are you sure?** Press `=` again to load |
+| `del` | show which project slot | asks **SAVE: Are you sure?** Press `del` again to save |
 | `=` + `del` together | load the built-in demo | |
 | `ok` | (nothing) | while held, the lid shows the key map |
 
@@ -50,10 +56,14 @@ PAGE BPM- BPM+ CLR ◄   ▼   ▲   ►  SONG ACC  SLD  AUX  REC  PLAY
 keyboard with every key labelled for the page and track you are on, and a
 colour-matched legend underneath. Let go and the lid goes back to where it
 was. Everything else keeps working while you hold it, so you can hold `ok`,
-find the key, and press it. The music does not pause.
+find the key, and press it. The music does not pause. This is the only help
+on the device, and it is always current: it is drawn from the same table the
+keys are read from.
+
+**Tempo has no key.** It is the **BPM** row on the SETTINGS page (section 3).
 
 The pages, in the order `ctrl` steps through them:
-**PATTERN → SOUND → SAMPLE → SONG → HELP**.
+**PATTERN → SETTINGS → SAMPLE → SONG**.
 
 The footer of the screen shows what just happened ("REC ON", "DECK A: 2 BAR").
 
@@ -83,8 +93,8 @@ Memory is small. Both decks together hold about 5 seconds at full quality or
 
 1. Tap `3` until the footer says **DECK A**.
 2. Tap `ctrl` until you are on the **SAMPLE** page. It lists `/groovebox/loops`.
-3. `c` / `v` move down / up the list.
-4. Tap `.` to load the highlighted file into deck A.
+3. `.` / `;` move down / up the list.
+4. Tap `c` to load the highlighted file into deck A.
    (Or tap `4` to load into deck A and `5` to load into deck B, whichever deck
    is selected.)
 5. The footer says **DECK A: 2 BAR** (it guessed the length at the current
@@ -94,15 +104,16 @@ Memory is small. Both decks together hold about 5 seconds at full quality or
 
 Either set the tempo to the sample, or stretch the sample to the tempo.
 
-- **Tempo from the sample:** `ctrl` to **SOUND** (deck still selected),
-  `c` down to the last row **BPM<LOOP**, tap `b`. Footer: **BPM FROM LOOP**.
-- **Tempo by hand:** tap `opt` / `alt` for −1 / +1 BPM, on any page.
-- **Stretch the sample:** on SOUND go to **FIT** and use `x` / `b` to pick
+- **Tempo from the sample:** `ctrl` to **SETTINGS** (deck still selected),
+  `.` down to the row **BPM<LOOP**, tap `/`. Footer: **BPM FROM LOOP**.
+- **Tempo by hand:** SETTINGS page, **BPM** row (the first amber row, on every
+  track), `,` / `/` for −1 / +1. Hold the key and it speeds up.
+- **Stretch the sample:** on SETTINGS go to **FIT** and use `,` / `/` to pick
   1, 2, 4 or 8 bars. This changes the pitch along with the speed.
 
 ## 4. Choose how the deck plays: LOOP or CHOP
 
-On the **SOUND** page with the deck selected, the top row is **MODE**. Tap `b`
+On the **SETTINGS** page with the deck selected, the top row is **MODE**. Tap `/`
 to switch.
 
 - **LOOP**: the sample plays by itself, locked to the bar, whenever the
@@ -110,8 +121,10 @@ to switch.
 - **CHOP**: the sample is cut at its transients and each piece sits on a key.
   Nothing plays until you play or program it.
 
-On the SOUND page, `c` / `v` pick a row and `x` / `b` change it. Hold `m` while
-pressing `x` / `b` for fine steps.
+On the SETTINGS page, `.` / `;` pick a row and `,` / `/` change it. Hold `m`
+while pressing `,` / `/` for fine steps. Grey rows belong to the selected track;
+amber rows (tempo, swing, key, filter, pump, lid) are the same whichever track
+is selected.
 
 ## 5. Play the chops and build a loop (CHOP mode)
 
@@ -126,27 +139,28 @@ Hold `m` while hitting a key for an accented (louder) hit.
 
 **Record it live**
 
-1. Tap `/` so the footer says **REC ON**.
+1. Tap `v` so the footer says **REC ON**.
 2. Tap `space`. The drums play; tap the chop keys in time.
 3. Hits are snapped to the nearest 16th and loop round straight away.
 4. Wrong hit: hold `z` while it plays past, and it is erased at the playhead.
-5. Tap `/` to stop recording. The loop keeps playing.
+5. Tap `v` to stop recording. The loop keeps playing.
 
 **Or write it step by step**
 
-1. Stop the sequencer (`space`). Tap `/` for **REC ON**.
-2. Move the cursor with `x` / `b` to the step you want.
+1. Stop the sequencer (`space`). Tap `v` for **REC ON**.
+2. Move the cursor with `,` / `/` to the step you want.
 3. Tap a chop key: it is written at the cursor and the cursor moves on a step.
 4. `z` clears the step under the cursor.
 
-**Change the chops** (SOUND page, deck selected)
+**Change the chops** (SETTINGS page, deck selected; the small screen shows the
+waveform with the slice marks while you do)
 
 - **SLICES**: AUTO (transients), 4, 8 or 16 equal pieces.
-- **SLICE POS**: play a chop, then `x` / `b` nudge where it starts.
+- **SLICE POS**: play a chop, then `,` / `/` nudge where it starts.
 - **IN** / **OUT**: trim the start and end of the whole sample.
 - **PITCH**: ±12 semitones. **LEVEL**: deck volume.
 
-**One or two bars:** SOUND page, **LENGTH** row, tap `b`. On the PATTERN page
+**One or two bars:** SETTINGS page, **LENGTH** row, tap `/`. On the PATTERN page
 moving the cursor past step 16 shows the second bar.
 
 ## 6. The filter
@@ -162,12 +176,12 @@ Works on every page except SONG. It filters both decks, not the drums or bass.
 
 The bar in the header shows where the cutoff is.
 
-**Record a sweep into the pattern:** tap `/` (REC ON), tap `space`, then hold
+**Record a sweep into the pattern:** tap `v` (REC ON), tap `space`, then hold
 `e` or `u`. The movement is stored on the steps you swept across and repeats
 every time the pattern plays. To remove it, select the deck, put the cursor on
 a step and tap `z` (this also clears a chop on that step).
 
-**Filter type and slope:** SOUND page, deck selected, rows **TYPE** (LP / HP /
+**Filter type and slope:** SETTINGS page, rows **TYPE** (LP / HP /
 BP) and **SLOPE** (12 / 24 dB).
 
 ## 7. Drums
@@ -180,25 +194,26 @@ key    fn    Aa    a     s     d       f    g      h
 sound  kick  clap  hat   open  shaker  rim  snare  808 kick
 ```
 
-Record exactly as with chops: `/` then `space` and play, or stopped with REC on
+Record exactly as with chops: `v` then `space` and play, or stopped with REC on
 to write at the cursor. Hold `m` for accents. Tapping `z` on the drum track
 clears **every** lane on that step.
 
 A FILTRE drum pattern is already on pattern 1. Other ready-made grooves:
-`ctrl` to the **HELP** page, then tap `4` FILTRE, `5` NU-DISCO, `6` HOMEWORK,
-`7` BANGER. If you have changed the drums yourself it asks you to hold the key.
+SETTINGS page, **STYLE** row, `,` / `/` steps through FILTRE, NU-DISCO,
+HOMEWORK, BANGER. If you have changed the drums yourself it asks
+**Replace drums?** Press the same arrow again for yes.
 
-**Change a drum sound:** SOUND page with drums selected. Tap a pad to pick the
-lane, `c` / `v` for the row, `x` / `b` to change it (engine, sound, volume,
+**Change a drum sound:** SETTINGS page with drums selected. Tap a pad to pick
+the lane, `.` / `;` for the row, `,` / `/` to change it (engine, sound, volume,
 tune, decay, choke).
 
 **Use your own one-shots:** put short WAVs in `/groovebox/samples/`. With drums
-selected go to the SAMPLE page, highlight a file, tap `.` to hear it, tap
+selected go to the SAMPLE page, highlight a file, tap `c` to hear it, tap
 `4` … `-` to put it on lane 1 … 8.
 
 ## 8. The pump (sidechain)
 
-Lane 1, the kick, ducks the decks every time it hits. SOUND page, deck selected:
+Lane 1, the kick, ducks the decks every time it hits. SETTINGS page:
 
 - **PUMP**: depth, 0–100. 0 is off.
 - **RELEASE**: how long it takes to come back.
@@ -208,26 +223,26 @@ Lane 1, the kick, ducks the decks every time it hits. SOUND page, deck selected:
 
 ## 9. Bass
 
-**Have it written for you:** select a deck, SOUND page, set **KEY** (the key of
-your sample) and **BASSMODE**. Go back to PATTERN and hold `,`. A bass line in
+**Have it written for you:** SETTINGS page, set **KEY** (the key of
+your sample) and **BASSMODE**. Go back to PATTERN and hold `x`. A bass line in
 that key is written onto T1 of the current pattern.
 
 **Play it yourself:** tap `` ` `` to select T1.
 
 ```
-white  fn  Aa  a   s   d   f   g   h   j   k   l   ;   '
-note   C   D   E   F   G   A   B   C   D   E   F   G   A
+white  fn  Aa  a   s   d   f   g   h   j   k   l
+note   C   D   E   F   G   A   B   C   D   E   F
 
-black  q   w   r   t   y   i   o   [   ]   \
-note   C#  D#  F#  G#  A#  C#  D#  F#  G#  A#
+black  q   w   r   t   y   i   o   [
+note   C#  D#  F#  G#  A#  C#  D#  F#
 ```
 
-Hold `opt` / `alt` for octave down / up. Record with `/` exactly as above.
-Tap `,` on a note to make it slide into the next one. `1` and `2` select the
+Tap `opt` / `alt` for octave down / up. Record with `v` exactly as above.
+Tap `x` on a note to make it slide into the next one. `1` and `2` select the
 other two synth tracks (T2 is a chord stab).
 
-**Synth sound:** SOUND page with T1, T2 or T3 selected; `c` / `v` rows,
-`x` / `b` change, any piano key auditions it.
+**Synth sound:** SETTINGS page with T1, T2 or T3 selected; `.` / `;` rows,
+`,` / `/` change, any piano key auditions it.
 
 ## 10. Make variations
 
@@ -246,14 +261,14 @@ times, with its own mutes and a filter target.
 
 | Key | Does |
 |---|---|
-| `x` `b` | move one slot |
-| `c` `v` | move one row (16 slots) |
+| `,` `/` | move one slot |
+| `.` `;` | move one row (16 slots) |
 | `4` … `-` | put pattern 1 … 8 in this slot and move on |
 | `p` / `tab` | repeats +1 / −1 (1 to 16) |
 | `u` / `e` | filter target up / down. The cutoff glides to this value across the slot. Below zero = no target |
 | `fn` `Aa` `a` `s` `d` `f` `g` | mute T1, T2, T3, drums, deck A, deck B, kick only |
 | `z` | empty this slot |
-| `.` | make this slot the loop-back point |
+| `c` | make this slot the loop-back point |
 
 The song ends at the first empty slot and jumps back to the loop-back point.
 
@@ -273,16 +288,18 @@ A classic shape, using one pattern and its copies:
 
 Projects live in eight slots, P1–P8.
 
-- **Pick the slot:** on the SONG page hold `opt` (previous) or `alt` (next).
-- **Save:** hold `del`. Footer: **SAVED**.
-- **Load:** hold `=`. Footer: **LOADED**.
+- **Pick the slot:** on the SONG page tap `opt` (previous) or `alt` (next).
+- **Save:** hold `del`. Both screens ask **SAVE P1: Are you sure?** Press `del`
+  again: **SAVED**.
+- **Load:** hold `=`. **LOAD P1: Are you sure?** Press `=` again: **LOADED**.
+- Any other key, or four seconds, answers no (**CANCELLED**).
 - Tapping `=` or `del` just tells you which slot is current.
 
 Samples are saved by file name, so keep the WAVs on the card.
 
 ## 13. Bounce to the card
 
-On the **SONG** page hold `.`. A progress bar runs and the footer says
+On the **SONG** page hold `c`. A progress bar runs and the footer says
 **BOUNCED T01**. On the card, in `/groovebox/bounce/`:
 
 ```
@@ -300,8 +317,8 @@ pattern.
 
 ## Extras
 
-**Record from the microphone.** PATTERN or SOUND page. Select a drum lane or a
-deck, hold `.`, make the sound, let go. It lands on that lane or deck. The
+**Record from the microphone.** PATTERN or SETTINGS page. Select a drum lane or a
+deck, hold `c`, make the sound, let go. It lands on that lane or deck. The
 sequencer stops while recording.
 
 **Resample.** While playing, hold `n`.
@@ -311,18 +328,19 @@ sequencer stops while recording.
   line and loaded onto that deck. This is how you filter a loop, print it, and
   filter it again.
 
-**Swing.** SOUND page, deck selected, **SWING** (50 = straight, 62 is the
+**Swing.** SETTINGS page, **SWING** (50 = straight, 62 is the
 FILTRE default). It moves drums and synths only.
 
-**Blend.** SOUND page, **BLEND** crossfades deck A against deck B.
+**Blend.** SETTINGS page, **BLEND** crossfades deck A against deck B.
 
-**Long file, wrong part.** SOUND page, **START** moves where loading begins, in
+**Long file, wrong part.** SETTINGS page, deck selected, **START** moves where loading begins, in
 seconds. **QUALITY** forces 16-bit or lo-fi. Both apply the next time you load.
 
-**Lid.** On the HELP page tap `.` to turn the lid display off or on.
+**Lid.** SETTINGS page, last row **LID**: off or on. With it off the small
+screen becomes the editor.
 
-**Memory check.** HELP page, `c` to the bottom: it shows free heap and the
-sample arena size.
+**Memory check.** The bottom line of the lid shows what each deck and the
+one-shots are using and how much sample memory is free.
 
 ## When something does not work
 
@@ -335,4 +353,6 @@ sample arena size.
 | NO ROOM / BUSY | resample or mic has no memory left |
 | PLACE A PATTERN FIRST | SONG page: the slot is empty, put a pattern in it first |
 | NO SD CARD | bounce and save need the card |
+| P1 IS EMPTY | you held LOAD on a slot nothing was saved to |
+| CANCELLED | a LOAD / SAVE / style question was up and you pressed something else |
 | DEMO: NO LOOP | the demo song loaded but the loop could not; tell me |

@@ -47,6 +47,19 @@ static uint8_t  s_rptKc   = KC_NONE;
 static uint32_t s_rptNext = 0;
 static uint16_t s_rptCount = 0;
 
+// a question on screen ("LOAD: Are you sure?"): the same key again says yes,
+// any other key or a few seconds says no
+enum : uint8_t { CONF_NONE = 0, CONF_LOAD, CONF_SAVE, CONF_STYLE };
+#define CONFIRM_MS 4000
+static uint8_t  s_confKind = CONF_NONE, s_confAct = ACT_NONE, s_confArg = 0;
+static uint32_t s_confUntil = 0;
+
+static void confirmAsk(uint8_t kind, uint8_t act, uint8_t arg, const char* question) {
+    s_confKind = kind; s_confAct = act; s_confArg = arg;
+    s_confUntil = millis() + CONFIRM_MS;
+    uiStatusFor(question, CONFIRM_MS);
+}
+
 // filter keys: integrated over time so a sweep is smooth whatever the loop rate
 static uint32_t s_fltLastMs = 0, s_cutSince = 0;
 static float    s_cutAcc = 0.0f, s_resAcc = 0.0f;
@@ -72,9 +85,7 @@ static void setCutoff(int v) {
     touchCutoff();
 }
 
-// ---------- SOUND page parameter model ----------
-#define SYNTH_PARAMS 9
-#define DRUM_PARAMS  7
+// ---------- SETTINGS page parameter model (row layout: ui.h) ----------
 
 static void adjustSynthParam(SynthTrack& t, uint8_t row, int dir, bool fine) {
     float step = fine ? 0.01f : 0.05f;
@@ -131,10 +142,11 @@ static void adjustDrumParam(uint8_t lane, uint8_t row, int dir, bool fine) {
     }
 }
 
-// styles never unload loop audio; drums the player wrote need a hold (HELP page)
-static void applyStyle(uint8_t style, bool force) {
-    if (!force && styleNeedsConfirm(style, g_curPattern)) {
-        uiStatus("HELP pg: HOLD P1-P4");
+// styles never unload loop audio; drums the player wrote are only replaced on a yes
+static void applyStyle(uint8_t style, uint8_t act) {
+    if (styleNeedsConfirm(style, g_curPattern)) {
+        char m[28]; snprintf(m, sizeof(m), "%.9s: Replace drums?", g_styleNames[style]);
+        confirmAsk(CONF_STYLE, act, style, m);
         return;
     }
     styleApply(style, g_curPattern);
@@ -171,7 +183,16 @@ static void adjustDeckParam(uint8_t di, uint8_t row, int dir, bool fine) {
         case DR_SWING:    g_fx.swing = (uint8_t)constrain((int)g_fx.swing + dir, 50, 72); break;
         case DR_KEY:      g_fx.key = (uint8_t)((g_fx.key + dir + 12) % 12); break;
         case DR_BASSMODE: g_fx.bassMode = (uint8_t)((g_fx.bassMode + dir + BASS_COUNT) % BASS_COUNT); break;
-        case DR_STYLE:    applyStyle((uint8_t)((g_fx.style + dir + STYLE_COUNT) % STYLE_COUNT), false); break;
+        case DR_STYLE:    applyStyle((uint8_t)((g_fx.style + dir + STYLE_COUNT) % STYLE_COUNT),
+                                     dir > 0 ? ACT_RIGHT : ACT_LEFT); break;
+        case DR_BPM:      g_bpm = (uint16_t)constrain((int)g_bpm + dir * (fine ? 1 : s_rptCount > 8 ? 4 : 1), 40, 300); break;
+        case DR_LID:
+        {
+            bool was = g_lidOk;
+            lidToggle();
+            if (!was && !g_lidOk) uiStatus("NO LID FOUND");
+            break;
+        }
         case DR_PATLEN:
             setPatternLength(g_curPattern, curLen() == NUM_STEPS ? STEPS_PER_BAR : NUM_STEPS);
             uiStatus(curLen() == NUM_STEPS ? "2 BARS" : "1 BAR"); break;
@@ -223,18 +244,15 @@ static void arrow(uint8_t act, const KeySnap& now) {
             if (dx) g_curStep = (uint8_t)((g_curStep + curLen() + dx) % curLen());   // crossing 16 flips the bar
             break;
 
-        case PAGE_SOUND: {
+        case PAGE_SETTINGS: {
             bool fine = accentHeld(now);
-            if (trackIsDeck(g_curTrack)) {
-                if (dy) g_soundParam = (uint8_t)((g_soundParam + DR_COUNT + dy) % DR_COUNT);
-                if (dx) adjustDeckParam(trackDeck(g_curTrack), g_soundParam, dx, fine);
-                break;
-            }
-            uint8_t rows = (g_curTrack == TRK_DRUMS) ? DRUM_PARAMS : SYNTH_PARAMS;
+            uint8_t rows = uiRowCount();
             if (g_soundParam >= rows) g_soundParam = 0;
             if (dy) g_soundParam = (uint8_t)((g_soundParam + rows + dy) % rows);
             if (dx) {
-                if (g_curTrack == TRK_DRUMS) adjustDrumParam(g_curDrumLane, g_soundParam, dx, fine);
+                uint8_t dr = uiRowDeckRow(g_soundParam);      // a deck row or one of the shared block
+                if (dr < DR_COUNT) adjustDeckParam(trackIsDeck(g_curTrack) ? trackDeck(g_curTrack) : 0, dr, dx, fine);
+                else if (g_curTrack == TRK_DRUMS) adjustDrumParam(g_curDrumLane, g_soundParam, dx, fine);
                 else adjustSynthParam(g_synths[g_curTrack], g_soundParam, dx, fine);
             }
             break;
@@ -249,18 +267,13 @@ static void arrow(uint8_t act, const KeySnap& now) {
             if (dx) g_songCursor = (uint8_t)((g_songCursor + SONG_LENGTH + dx) % SONG_LENGTH);
             break;
 
-        case PAGE_HELP: {
-            int total = (int)(HELP_STEP_LINES + HELP_KEY_LINES) + 4;
-            g_helpScroll = (uint8_t)constrain((int)g_helpScroll + dy * 5, 0, total - 5);
-            break;
-        }
         default: break;
     }
     g_needRedraw = true;
 }
 
 // ---------- filter keys ----------
-// PATTERN/SOUND/SAMPLE/HELP: the live filter. SONG: the slot under the cursor.
+// PATTERN/SETTINGS/SAMPLE: the live filter. SONG: the slot under the cursor.
 static void filterKeyDown(uint8_t act) {
     if (g_curPage == PAGE_SONG) {
         SongSlot& sl = g_song[g_songCursor];
@@ -325,6 +338,19 @@ static void doImmediate(uint8_t act, const KeySnap& now) {
             uiStatus(g_recEnabled ? "REC ON" : "REC OFF");
             g_needRedraw = true; break;
 
+        case ACT_OCT_DN: case ACT_OCT_UP: {
+            int dir = (act == ACT_OCT_UP) ? 1 : -1;
+            char m[16];
+            if (g_curPage == PAGE_SONG) {                 // the project slot LOAD / SAVE use
+                g_curProject = (uint8_t)constrain((int)g_curProject + dir, 0, NUM_PROJECT_SLOTS - 1);
+                snprintf(m, sizeof(m), "PROJECT P%u", g_curProject + 1);
+            } else {
+                g_curOctave = (uint8_t)constrain((int)g_curOctave + dir, 1, 7);
+                snprintf(m, sizeof(m), "OCTAVE %u", g_curOctave);
+            }
+            uiStatus(m); break;
+        }
+
         case ACT_ACCENT: break;   // pure modifier
         case ACT_KEYS:
             if (!g_lidOk) uiStatus("KEY MAP NEEDS THE LID");
@@ -357,6 +383,7 @@ static void doShort(uint8_t act) {
     // track select
     if (act >= ACT_TRACK1 && act <= ACT_TRACK3) {
         g_curTrack = (uint8_t)(act - ACT_TRACK1);
+        if (g_soundParam >= uiRowCount()) g_soundParam = 0;
         if (g_curPage == PAGE_SAMPLE) uiScanSampleDir();
         g_needRedraw = true; return;
     }
@@ -391,9 +418,6 @@ static void doShort(uint8_t act) {
             sl.pattern = k;
             g_songCursor = (g_songCursor + 1) % SONG_LENGTH;
             g_needRedraw = true;
-        } else if (g_curPage == PAGE_HELP && k < STYLE_COUNT) {
-            applyStyle(k, false);
-            g_needRedraw = true;
         } else {
             g_curPattern = k;
             if (g_curStep >= curLen()) g_curStep = 0;
@@ -414,17 +438,10 @@ static void doShort(uint8_t act) {
             snprintf(m, sizeof(m), "P%u hold=SAVE", g_curProject + 1);
             uiStatus(m); break;
         }
-        case ACT_BPM_DN:
-            g_bpm = (uint16_t)constrain((int)g_bpm - 1, 40, 300);
-            g_needRedraw = true; break;
-        case ACT_BPM_UP:
-            g_bpm = (uint16_t)constrain((int)g_bpm + 1, 40, 300);
-            g_needRedraw = true; break;
-
         case ACT_PAGE:
             g_curPage = (Page)(((int)g_curPage + 1) % PAGE_COUNT);
             if (g_curPage == PAGE_SAMPLE) uiScanSampleDir();
-            if (g_curPage == PAGE_SOUND) g_soundParam = 0;
+            if (g_curPage == PAGE_SETTINGS) g_soundParam = 0;
             g_needRedraw = true; break;
 
         case ACT_PLAY:
@@ -465,9 +482,6 @@ static void doShort(uint8_t act) {
             } else if (g_curPage == PAGE_SONG) {
                 g_songLoopStart = g_songCursor;
                 uiStatus("LOOP SET"); g_needRedraw = true;
-            } else if (g_curPage == PAGE_HELP) {
-                lidToggle();
-                uiStatus(g_lidOk ? "LID ON" : "LID OFF"); g_needRedraw = true;
             } else {
                 uiStatus("hold = MIC SAMPLE");
             }
@@ -503,10 +517,6 @@ static void doLong(uint8_t act) {
     }
     if (act >= ACT_PAT1 && act <= ACT_PAT8) {
         uint8_t k = (uint8_t)(act - ACT_PAT1);
-        if (g_curPage == PAGE_HELP) {                     // hold = replace the player's own drums too
-            if (k < STYLE_COUNT) { applyStyle(k, true); g_needRedraw = true; }
-            return;
-        }
         if (g_curPage == PAGE_SAMPLE || g_curPage == PAGE_SONG) return;
         clonePatternTo(k);
         g_curPattern = k;
@@ -514,13 +524,16 @@ static void doLong(uint8_t act) {
         uiStatus(m); g_needRedraw = true; return;
     }
     switch (act) {
-        case ACT_LOAD:
-            uiStatus("LOADING..."); uiDrawNow();
-            uiStatus(storageLoadProject(g_curProject) ? "LOADED" : "LOAD FAILED");
-            g_needRedraw = true; break;
-        case ACT_SAVE:
-            uiStatus(storageSaveProject(g_curProject) ? "SAVED" : "SAVE FAILED");
+        case ACT_LOAD: case ACT_SAVE: {       // the hold only asks; the same key again does it
+            char m[28];
+            if (act == ACT_LOAD && !storageProjectExists(g_curProject)) {
+                snprintf(m, sizeof(m), "P%u IS EMPTY", g_curProject + 1);
+                uiStatus(m); break;
+            }
+            snprintf(m, sizeof(m), "%s P%u: Are you sure?", act == ACT_LOAD ? "LOAD" : "SAVE", g_curProject + 1);
+            confirmAsk(act == ACT_LOAD ? CONF_LOAD : CONF_SAVE, act, 0, m);
             break;
+        }
         case ACT_PAGE:
             g_curPage = PAGE_PATTERN; g_needRedraw = true; break;
         case ACT_PLAY:
@@ -528,19 +541,6 @@ static void doLong(uint8_t act) {
         case ACT_CLR:
             clearPattern(g_curPattern);
             uiStatus("PATTERN CLEARED"); g_needRedraw = true; break;
-        case ACT_BPM_DN:
-            if (g_curPage == PAGE_SONG) {
-                if (g_curProject > 0) g_curProject--;
-                uiStatus("PROJECT");
-            } else if (g_curOctave > 1) g_curOctave--;
-            g_needRedraw = true; break;
-        case ACT_BPM_UP:
-            if (g_curPage == PAGE_SONG) {
-                if (g_curProject < NUM_PROJECT_SLOTS - 1) g_curProject++;
-                uiStatus("PROJECT");
-            } else if (g_curOctave < 7) g_curOctave++;
-            g_needRedraw = true; break;
-
         case ACT_SONG:                        // long SONG = resample the mix
             if (!g_playing) uiStatus("PLAY, THEN HOLD");
             else if (!resampleArm(g_curTrack)) uiStatus("NO ROOM / BUSY");
@@ -561,7 +561,7 @@ static void doLong(uint8_t act) {
                 if (take > 0) snprintf(m, sizeof(m), "BOUNCED T%02d", take); else snprintf(m, sizeof(m), "BOUNCE FAILED");
                 uiStatus(m); g_needRedraw = true;
             } else if (micRecStart(g_curTrack, g_curDrumLane)) {
-                g_recPadKc = (uint8_t)'.';
+                g_recPadKc = (uint8_t)'c';
             } else {
                 uiStatus("MIC BUSY / FULL");
             }
@@ -573,9 +573,27 @@ static void doLong(uint8_t act) {
 // label next to the hold bar; a few holds mean something else on some pages
 static const char* longName(uint8_t act) {
     if (act == ACT_AUX && g_curPage == PAGE_SONG) return "BOUNCE";
-    if (g_curPage == PAGE_HELP && act >= ACT_PAT1 && act <= ACT_PAT4) return "STYLE";
     if ((g_curPage == PAGE_SAMPLE || g_curPage == PAGE_SONG) && act >= ACT_PAT1 && act <= ACT_PAT8) return "";
     return actLongName(act);
+}
+
+// the answer to confirmAsk()
+static void confirmRun(uint8_t kind, uint8_t arg) {
+    switch (kind) {
+        case CONF_LOAD:
+            uiStatus("LOADING..."); uiDrawNow();
+            uiStatus(storageLoadProject(g_curProject) ? "LOADED" : "LOAD FAILED");
+            break;
+        case CONF_SAVE:
+            uiStatus("SAVING..."); uiDrawNow();
+            uiStatus(storageSaveProject(g_curProject) ? "SAVED" : "SAVE FAILED");
+            break;
+        case CONF_STYLE:
+            styleApply(arg, g_curPattern);
+            uiStatus(g_styleNames[arg]);
+            break;
+    }
+    g_needRedraw = true;
 }
 
 // ---------- piano / pads (key-down, latency-critical path) ----------
@@ -588,14 +606,14 @@ static void doPiano(uint8_t kc, const KeySnap& now) {
         if (bit >= 0 && sl.pattern != SONG_EMPTY) { sl.mute ^= (uint8_t)(1 << bit); g_needRedraw = true; }
         return;
     }
-    if (g_curPage != PAGE_PATTERN && g_curPage != PAGE_SOUND) return;
+    if (g_curPage != PAGE_PATTERN && g_curPage != PAGE_SETTINGS) return;
 
     if (g_curTrack == TRK_DRUMS) {
         int8_t lane = padLane(kc);
         if (lane < 0) return;
         g_curDrumLane = (uint8_t)lane;
         if (resamplePending()) { resampleCommit(lane); return; }
-        if (g_curPage == PAGE_SOUND) triggerLaneLive(lane);
+        if (g_curPage == PAGE_SETTINGS) triggerLaneLive(lane);
         else                         liveDrumHit(lane, accent);
         g_needRedraw = true;
         return;
@@ -609,7 +627,7 @@ static void doPiano(uint8_t kc, const KeySnap& now) {
         if (sl >= g_decks[d].nSlices) return;
         g_decks[d].lastSlice = (uint8_t)sl;
         bool keepRec = g_recEnabled;
-        if (g_curPage == PAGE_SOUND) g_recEnabled = false;   // SOUND page only auditions
+        if (g_curPage == PAGE_SETTINGS) g_recEnabled = false;   // SETTINGS page only auditions
         liveDeckHit(d, (uint8_t)sl, accent);
         g_recEnabled = keepRec;
         g_needRedraw = true;
@@ -620,7 +638,7 @@ static void doPiano(uint8_t kc, const KeySnap& now) {
     if (semi < 0) return;
     uint8_t note, oct; semiToNote(semi, note, oct);
 
-    if (g_curPage == PAGE_SOUND) {
+    if (g_curPage == PAGE_SETTINGS) {
         auditionSynth(g_curTrack, note, oct, accent);
     } else {
         bool legato = heldPianoCount(s_prev) >= 1;
@@ -632,6 +650,7 @@ static void doPiano(uint8_t kc, const KeySnap& now) {
 void inputInit() {
     s_prev = KeySnap();
     s_nHolds = 0; s_rptAct = ACT_NONE;
+    s_confKind = CONF_NONE;
     g_holdProg = 0; g_holdLabel[0] = 0;
     s_fltLastMs = millis();
 }
@@ -644,6 +663,7 @@ void inputUpdate() {
     if (g_playing && g_recEnabled && s_prev.has('z')) clearStepAtPlayhead();
 
     filterKeysHeld(nowMs);
+    if (s_confKind && (int32_t)(nowMs - s_confUntil) >= 0) s_confKind = CONF_NONE;   // nobody answered
 
     // -- auto-repeat --
     if (s_rptAct != ACT_NONE && s_prev.has(s_rptKc) && nowMs >= s_rptNext) {
@@ -721,9 +741,17 @@ void inputUpdate() {
         uint8_t kc = now.codes[i];
         if (s_prev.has(kc)) continue;
 
+        // a question is up: this key answers it (accent and the key map are not answers)
+        if (s_confKind && kc != 'm' && kc != KC_ENTER) {
+            uint8_t kind = s_confKind;
+            s_confKind = CONF_NONE;
+            if (keyAction(kc) == s_confAct) { confirmRun(kind, s_confArg); continue; }
+            uiStatus("CANCELLED");
+        }
+
         // piano/pads take priority over any action bound to the same key
         if (pianoSemi(kc) >= 0 &&
-            (g_curPage == PAGE_PATTERN || g_curPage == PAGE_SOUND || g_curPage == PAGE_SONG)) {
+            (g_curPage == PAGE_PATTERN || g_curPage == PAGE_SETTINGS || g_curPage == PAGE_SONG)) {
             doPiano(kc, now);
             continue;
         }

@@ -22,6 +22,7 @@ struct ChopVoice {
     const uint8_t* data;
     float   pos, inc;          // inc < 0 = reversed
     float   start, end;        // frames; playback stays inside [start, end)
+    float   lim;               // last readable frame of the sample: a fading voice runs past `end`
     float   gain, vel;
     uint8_t fmt;
     bool    active, fadeOut, loop;

@@ -68,13 +68,15 @@ int main() {
     g_fakeMs += 5000;
     g_holdProg = 0.6f; strcpy(g_holdLabel, "WRITE BASS"); shot("03_pattern_hold"); g_holdProg = 0;
 
-    g_curPage = PAGE_SOUND; g_curTrack = TRK_DECK_A; g_soundParam = DR_MODE; shot("04_sound_deck_top");
+    g_curPage = PAGE_SETTINGS; g_curTrack = TRK_DECK_A; g_soundParam = DR_MODE; shot("04_sound_deck_top");
     g_soundParam = DR_CUTOFF; shot("05_sound_deck_cutoff");
     g_soundParam = DR_SETBPM; g_curTrack = TRK_DECK_B; g_fx.reso = 110; g_fx.poles = 0; shot("06_sound_deckB_end");
     g_fx.type = FLT_HP; g_soundParam = DR_TYPE; shot("07_sound_hp");
     g_fx.type = FLT_LP; g_fx.poles = 1; g_fx.reso = 44;
     g_curTrack = 0; g_soundParam = 2; shot("08_sound_synth");
     g_curTrack = TRK_DRUMS; g_curDrumLane = 0; g_soundParam = 2; shot("09_sound_drum");
+    g_soundParam = DRUM_PARAMS; shot("09b_sound_drum_bpm");          // first shared row: BPM
+    g_curTrack = TRK_DECK_A; g_soundParam = DR_SLICEPOS; shot("09c_sound_deck_slicepos");
 
     g_curPage = PAGE_SAMPLE; g_curTrack = TRK_DECK_A;
     { std::vector<float> dummy; File f = SD.open("/groovebox/loops/Earth-Wind-and-Something-Else-Guitar-Section-LONG.wav", FILE_WRITE); f.write((const uint8_t*)"x", 1); f.close(); }
@@ -86,8 +88,17 @@ int main() {
     for (int i = 6; i < 40; i++) g_song[i] = { (uint8_t)(i % 8), (uint8_t)(1 + i % 5), (uint8_t)(i % 3 ? 0 : SLOT_MUTE_KICK), (uint8_t)(i % 4 ? i * 6 : TARGET_NONE) };
     shot("12_song"); g_songCursor = 4; shot("13_song_slot_full");
 
-    g_curPage = PAGE_HELP;
-    for (int s = 0; s <= 30; s += 10) { g_helpScroll = (uint8_t)(s > 25 ? 25 : s); char n[32]; snprintf(n, sizeof(n), "14_help_%02d", s); shot(n); }
+    // a question on both screens, at its longest
+    g_curPage = PAGE_PATTERN; g_curTrack = TRK_DECK_A;
+    uiStatusFor("HOMEWORK: Replace drums?", 4000); shot("14_confirm_question");
+    g_fakeMs += 5000;
+
+    // lid shut: the internal screen is the editor again
+    lidToggle();
+    g_curPage = PAGE_PATTERN; shot("24_nolid_pattern");
+    g_curPage = PAGE_SETTINGS; g_soundParam = DR_BPM; shot("25_nolid_settings_deck");
+    g_curTrack = 1; g_soundParam = 12; shot("26_nolid_settings_synth");
+    lidToggle();
 
     // empty machine: no loops loaded, pattern page
     sequencerStop(); run(64);
@@ -100,10 +111,10 @@ int main() {
     g_curPage = PAGE_SONG; shot("20_keys_song");
     g_curPage = PAGE_SAMPLE; g_curTrack = TRK_DECK_A; uiScanSampleDir(); shot("21_keys_sample_loops");
     g_curTrack = TRK_DRUMS; uiScanSampleDir(); shot("22_keys_sample_drums");
-    g_curPage = PAGE_HELP; shot("23_keys_help");
+    g_curPage = PAGE_SETTINGS; g_curTrack = 0; shot("23_keys_settings");
     g_keysOverlay = false;
     g_curPage = PAGE_PATTERN; g_curTrack = 0; g_curStep = 0; setPatternLength(0, STEPS_PER_BAR); shot("15_pattern_empty");
-    g_curPage = PAGE_SOUND; g_curTrack = TRK_DECK_A; g_soundParam = 0; shot("16_sound_deck_empty");
+    g_curPage = PAGE_SETTINGS; g_curTrack = TRK_DECK_A; g_soundParam = 0; shot("16_sound_deck_empty");
     printf("shots written\n");
     return 0;
 }

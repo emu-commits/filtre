@@ -91,16 +91,19 @@ void setup() {
 void loop() {
     inputUpdate();
     micSamplerUpdate();
+    uiTick();
 
     if (g_needRedraw) {
         g_needRedraw = false;
         uiDraw();
     }
 
-    // moving parts while playing: scope, playheads, the live filter bar
-    if (g_playing) {
+    // moving parts: scope, playheads (a chop played by hand has one too), the live filter bar
+    bool sounding = g_playing;
+    for (int d = 0; d < NUM_DECKS; d++) sounding |= g_decks[d].v[g_decks[d].cur].active;
+    if (sounding) {
         static uint32_t last = 0;
-        uint32_t every = (g_curPage == PAGE_SOUND) ? 60 : 120;
+        uint32_t every = (g_curPage == PAGE_SETTINGS || (g_curPage == PAGE_PATTERN && g_lidOk)) ? 60 : 120;
         if (millis() - last > every) { last = millis(); uiDraw(); }
     }
     lidUpdate(false);

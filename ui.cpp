@@ -1,7 +1,9 @@
 // ============================================================
 // FILTRE - ui.cpp  (from Microgroove)
-// 240x135, sprite double-buffered in 16 colours. 5 pages.
-// Drum grid drawn TR-style: kick (lane 1) at the bottom.
+// 240x135, sprite double-buffered in 16 colours. 4 pages.
+// With the lid open the lid is the editor (pattern grid, settings list) and
+// this screen is the lens beside it (deck waveforms, the focused setting).
+// With no lid, this screen is the editor.
 // Footer doubles as long-press progress bar / mic level meter.
 // ============================================================
 #include <M5Cardputer.h>
@@ -16,12 +18,12 @@
 #include "styles.h"
 #include "wavetable.h"
 #include "audio_engine.h"
+#include <math.h>
 
 Page    g_curPage    = PAGE_PATTERN;
 bool    g_needRedraw = true;
 uint8_t g_soundParam = 0;
 uint8_t g_songCursor = 0;
-uint8_t g_helpScroll = 0;
 float   g_holdProg   = 0.0f;
 char    g_holdLabel[16] = "";
 
@@ -62,11 +64,18 @@ void uiInit() {
     canvas.setTextSize(1);
 }
 
-void uiStatus(const char* msg) {
+void uiStatusFor(const char* msg, uint32_t ms) {
     strncpy(s_status, msg, sizeof(s_status) - 1);
     s_status[sizeof(s_status) - 1] = 0;
-    s_statusUntil = millis() + 1500;
+    s_statusUntil = millis() + ms;
     g_needRedraw = true;
+}
+void uiStatus(const char* msg) { uiStatusFor(msg, 1500); }
+
+const char* uiStatusText() { return (s_statusUntil && millis() < s_statusUntil) ? s_status : ""; }
+
+void uiTick() {
+    if (s_statusUntil && millis() >= s_statusUntil) { s_statusUntil = 0; g_needRedraw = true; }
 }
 
 bool uiBrowsingLoops() { return s_listIsLoops; }
@@ -107,11 +116,11 @@ static void printClipped(const char* s, int n) {
 // ---------- deck / FX rows (shared with the lid) ----------
 const char* uiDeckRowName(uint8_t row) {
     static const char* names[DR_COUNT] = {
-        "MODE", "SLICES", "PITCH", "LEVEL", "FIT",
+        "MODE", "SLICES", "SLICE POS", "PITCH", "LEVEL", "FIT",
+        "IN", "OUT", "START", "QUALITY", "BPM<LOOP",
+        "BPM", "SWING", "KEY", "BASSMODE", "STYLE", "LENGTH",
         "BLEND", "CUTOFF", "RESO", "TYPE", "SLOPE",
-        "PUMP", "RELEASE", "BASS PUMP", "GHOST",
-        "SWING", "KEY", "BASSMODE", "STYLE", "LENGTH",
-        "SLICE POS", "IN", "OUT", "START", "QUALITY", "BPM<LOOP",
+        "PUMP", "RELEASE", "BASS PUMP", "GHOST", "LID",
     };
     return row < DR_COUNT ? names[row] : "";
 }
@@ -138,6 +147,8 @@ void uiDeckRowValue(uint8_t di, uint8_t row, char* o, size_t n) {
         case DR_RELEASE:  snprintf(o, n, "%u ms", g_fx.release); break;
         case DR_BASSPUMP: snprintf(o, n, "%u%%", g_fx.bassPump); break;
         case DR_GHOST:    snprintf(o, n, "%s", g_fx.ghost ? "ON" : "OFF"); break;
+        case DR_BPM:      snprintf(o, n, "%u", g_bpm); break;
+        case DR_LID:      snprintf(o, n, "%s", g_lidOk ? "ON" : "OFF"); break;
         case DR_SWING:    snprintf(o, n, "%u%%", g_fx.swing); break;
         case DR_KEY:      snprintf(o, n, "%s", g_keyNames[g_fx.key % 12]); break;
         case DR_BASSMODE: snprintf(o, n, "%s", g_bassModeNames[g_fx.bassMode % BASS_COUNT]); break;
@@ -194,12 +205,41 @@ void uiSoundRowText(uint8_t row, char* name, size_t nn, char* val, size_t vn) {
     }
 }
 
+// ---------- SETTINGS rows: the track's own, then the shared block ----------
+static uint8_t localRows() {
+    if (trackIsDeck(g_curTrack)) return DR_SHARED_FIRST;
+    return (g_curTrack == TRK_DRUMS) ? DRUM_PARAMS : SYNTH_PARAMS;
+}
+uint8_t uiRowCount() { return (uint8_t)(localRows() + (DR_COUNT - DR_SHARED_FIRST)); }
+
+uint8_t uiRowDeckRow(uint8_t row) {
+    if (trackIsDeck(g_curTrack)) return row < DR_COUNT ? row : DR_COUNT;
+    uint8_t loc = localRows();
+    if (row < loc) return DR_COUNT;
+    row = (uint8_t)(DR_SHARED_FIRST + row - loc);
+    return row < DR_COUNT ? row : DR_COUNT;
+}
+
+void uiRowText(uint8_t row, char* name, size_t nn, char* val, size_t vn) {
+    uint8_t dr = uiRowDeckRow(row);
+    if (dr < DR_COUNT) {
+        snprintf(name, nn, "%s", uiDeckRowName(dr));
+        uiDeckRowValue(trackIsDeck(g_curTrack) ? trackDeck(g_curTrack) : 0, dr, val, vn);
+    } else uiSoundRowText(row, name, nn, val, vn);
+}
+
+void uiTrackTitle(char* o, size_t n) {
+    if (trackIsDeck(g_curTrack))       snprintf(o, n, "DECK %c", 'A' + trackDeck(g_curTrack));
+    else if (g_curTrack == TRK_DRUMS)  snprintf(o, n, "DRUM LANE %u", g_curDrumLane + 1);
+    else                               snprintf(o, n, "SYNTH %u", g_curTrack + 1);
+}
+
 // ---------- header / footer ----------
 static void drawHeader() {
     canvas.fillRect(0, 0, SCREEN_W, 11, COL_GRID);
     canvas.setTextColor(COL_TEXT);
     canvas.setCursor(2, 2);
-    static const char* pageNames[] = {"PATTERN","SOUND","SAMPLE","SONG","HELP"};
+    static const char* pageNames[] = {"PATTERN","SETTINGS","SAMPLE","SONG"};
     canvas.print(pageNames[g_curPage]);
 
     canvas.setCursor(54, 2);
@@ -240,7 +280,7 @@ static void drawFooter(const char* hint) {
     }
     canvas.setTextColor(COL_DIM);
     canvas.setCursor(2, SCREEN_H - 9);
-    if (millis() < s_statusUntil) {
+    if (uiStatusText()[0]) {
         canvas.setTextColor(COL_ACCENT);
         canvas.print(s_status);
     } else {
@@ -265,7 +305,7 @@ static const char* statusLine() {
     return b;
 }
 
-// ---------- PATTERN page ----------
+// ---------- PATTERN page, no lid: the grid ----------
 static void drawPatternPage() {
     const int gx = 14, gw = 14;          // grid origin x, cell width
     const Pattern& p = g_patterns[g_curPattern];
@@ -383,152 +423,167 @@ static void drawPatternPage() {
     }
 }
 
-// ---------- SOUND page ----------
-static void drawBar(int x, int y, float v01) {
-    canvas.drawRect(x, y, 62, 7, COL_GRID);
-    canvas.fillRect(x + 1, y + 1, (int)(60 * constrain(v01, 0.0f, 1.0f)), 5, COL_SYNTH1);
+// ---------- pieces shared by the SETTINGS and deck views ----------
+// one deck's waveform: slice marks, the last pad hit, IN/OUT, the playhead
+static void drawWave(uint8_t di, int wx, int wy, int ww, int wh) {
+    const Deck& k = g_decks[di];
+    canvas.drawRect(wx, wy, ww, wh, COL_GRID);
+    if (!deckLoaded(di)) return;
+    uint32_t len = g_samples[k.slot].length;
+    if (!len) return;
+    const int iw = ww - 2, x0 = wx + 1, mid = wy + wh / 2, amp = wh / 2 - 2;
+    uint8_t col = k.mute ? COL_DIM : trackCols[TRK_DECK_A + di];
+    for (int x = 0; x < iw; x++) {
+        int o = x * OV_W / iw;
+        int hi = mid - k.ovMax[o] * amp / 128, lo = mid - k.ovMin[o] * amp / 128;
+        canvas.drawFastVLine(x0 + x, hi, lo - hi + 1, col);
+    }
+    for (int s = 0; s < k.nSlices; s++) {
+        int x = x0 + (int)((uint64_t)k.slice[s] * (iw - 1) / len);
+        bool hot = (s == k.lastSlice);
+        canvas.drawFastVLine(x, wy + 1, hot ? wh - 2 : 5, hot ? COL_TEXT : COL_DIM);
+    }
+    canvas.drawFastVLine(x0 + (int)((uint64_t)k.in  * (iw - 1) / len), wy + wh - 8, 7, COL_AMBER);
+    canvas.drawFastVLine(x0 + (int)((uint64_t)k.out * (iw - 1) / len), wy + wh - 8, 7, COL_AMBER);
+    if (k.v[k.cur].active) {
+        int px = x0 + (int)((uint64_t)k.playFrame * (iw - 1) / len);
+        canvas.drawFastVLine(constrain(px, x0, x0 + iw - 1), wy + 1, wh - 2, COL_HOT);
+    }
 }
 
-static void drawDeckSound(uint8_t di) {
-    const Deck& k = g_decks[di];
-    uint8_t col = trackCols[TRK_DECK_A + di];
-    canvas.setTextColor(col);
-    canvas.setCursor(2, 14);
-    canvas.printf("DECK %c ", 'A' + di);
-    if (deckLoaded(di)) printClipped(k.name, 17);
-    else { canvas.setTextColor(COL_DIM); canvas.print("empty - PG: SAMPLE"); }
+static void drawScope(int wx, int wy, int ww, int wh) {
+    canvas.drawRect(wx, wy, ww, wh, COL_GRID);
+    const int mid = wy + wh / 2, step = (ww > 120) ? 1 : 2;
+    int prevY = mid;
+    for (int i = 0; i < ww - 2 && i * step < g_scopeIdx; i++) {
+        int yy = constrain(mid - (int)(g_scopeBuf[i * step] * (wh / 2 - 2)), wy + 1, wy + wh - 2);
+        if (i) canvas.drawLine(wx + i, prevY, wx + 1 + i, yy, COL_SYNTH2);
+        prevY = yy;
+    }
+    g_scopeIdx = 0;
+}
 
-    // rows (scrolling window of 9)
-    int first = (int)g_soundParam - 4;
-    if (first > DR_COUNT - 9) first = DR_COUNT - 9;
-    if (first < 0) first = 0;
+// the deck filter's response: 2-pole magnitude, twice for the 24 dB slope
+static void drawFilterCurve(int x0, int y0, int w, int h) {
+    canvas.drawRect(x0, y0, w, h, COL_GRID);
+    float fc = cutoffToHz(g_fx.cutoff);
+    float q  = 0.6f * powf(20.0f, (float)g_fx.reso / 127.0f);
+    int px = 0, py = 0;
+    for (int i = 0; i < 60; i++) {
+        float f = 40.0f * powf(11000.0f / 40.0f, (float)i / 59.0f);
+        float r = f / fc, r2 = r * r;
+        auto mag = [&](float qq) {
+            float den = sqrtf((1 - r2) * (1 - r2) + r2 / (qq * qq));
+            float num = g_fx.type == FLT_LP ? 1.0f : g_fx.type == FLT_HP ? r2 : r / qq;
+            return num / (den > 1e-6f ? den : 1e-6f);
+        };
+        float m = g_fx.poles ? mag(0.72f) * mag(q) : mag(q);
+        float db = 20.0f * log10f(m > 1e-5f ? m : 1e-5f);
+        int x = x0 + 2 + i * (w - 5) / 59;
+        int y = constrain(y0 + h * 3 / 10 - (int)(db * (float)h / 70.0f), y0 + 1, y0 + h - 2);
+        if (i) canvas.drawLine(px, py, x, y, COL_AMBER);
+        px = x; py = y;
+    }
+}
+
+// where the cutoff really is, and what the pump is doing
+static void drawCutPump(int x, int y, int w, bool stacked) {
+    int bw = stacked ? w - 22 : w / 2 - 28;
+    canvas.setTextColor(COL_DIM);
+    canvas.setCursor(x, y); canvas.print("CUT");
+    canvas.drawRect(x + 22, y, bw, 7, COL_GRID);
+    canvas.fillRect(x + 23, y + 1, (int)(g_cutNow * (bw - 2) / 255.0f), 5, COL_AMBER);
+    int px = stacked ? x : x + w / 2 + 4, py = stacked ? y + 11 : y;
+    canvas.setCursor(px, py); canvas.print("PMP");
+    canvas.drawRect(px + 22, py, bw, 7, COL_GRID);
+    canvas.fillRect(px + 23, py + 1, (int)(g_pumpNow * g_fx.pump * 0.01f * (bw - 2)), 5, COL_HOT);
+}
+
+// ---------- SETTINGS page, no lid: the scrolling list ----------
+static void drawSettingsPage() {
+    char title[24], name[24], val[28];
+    bool deck = trackIsDeck(g_curTrack);
+    uiTrackTitle(title, sizeof(title));
+    canvas.setTextColor(trackCols[g_curTrack]);
+    canvas.setCursor(2, 14);
+    canvas.print(title);
+    if (deck) {
+        canvas.print(" ");
+        if (deckLoaded(trackDeck(g_curTrack))) printClipped(g_decks[trackDeck(g_curTrack)].name, 17);
+        else { canvas.setTextColor(COL_DIM); canvas.print("empty - PG: SAMPLE"); }
+    }
+
+    int rows = uiRowCount(), sel = (g_soundParam < rows) ? g_soundParam : 0;
+    int first = constrain(sel - 4, 0, max(0, rows - 9));
     int y = 26;
-    char val[24];
-    for (int r = first; r < first + 9 && r < DR_COUNT; r++) {
-        bool sel = (g_soundParam == r);
-        bool shared = (r >= DR_BLEND && r <= DR_PATLEN);     // filter / pump / pocket: not per deck
-        canvas.setTextColor(sel ? COL_TEXT : (shared ? COL_AMBER : COL_DIM));
+    for (int r = first; r < first + 9 && r < rows; r++) {
+        uint8_t dr = uiRowDeckRow((uint8_t)r);
+        bool shared = (dr >= DR_SHARED_FIRST && dr < DR_COUNT);     // tempo / pocket / filter / pump
+        uiRowText((uint8_t)r, name, sizeof(name), val, sizeof(val));
+        canvas.setTextColor(r == sel ? COL_TEXT : (shared ? COL_AMBER : COL_DIM));
         canvas.setCursor(2, y);
-        canvas.printf("%s%-9s", sel ? ">" : " ", uiDeckRowName(r));
-        uiDeckRowValue(di, r, val, sizeof(val));
-        canvas.setTextColor(sel ? COL_TEXT : COL_DIM);
+        canvas.printf("%s%-9s", r == sel ? ">" : " ", name);
+        canvas.setTextColor(r == sel ? COL_TEXT : COL_DIM);
         printClipped(val, 13);
         y += 11;
     }
 
-    // right: waveform with slice marks and the playhead
     const int wx = 150, wy = 24, ww = 88, wh = 44;
-    canvas.drawRect(wx, wy, ww, wh, COL_GRID);
-    if (deckLoaded(di)) {
-        uint32_t len = g_samples[k.slot].length;
-        for (int x = 0; x < ww - 2; x++) {
-            int o = x * OV_W / (ww - 2);
-            int lo = k.ovMin[o], hi = k.ovMax[o];
-            int y0 = wy + wh / 2 - hi * (wh / 2 - 2) / 128, y1 = wy + wh / 2 - lo * (wh / 2 - 2) / 128;
-            canvas.drawFastVLine(wx + 1 + x, y0, y1 - y0 + 1, col);
+    if (deck) {
+        uint8_t di = trackDeck(g_curTrack);
+        drawWave(di, wx, wy, ww, wh);
+        if (deckLoaded(di)) {
+            const SampleInfo& si = g_samples[g_decks[di].slot];
+            canvas.setTextColor(COL_DIM);
+            canvas.setCursor(wx, wy + wh + 3);
+            canvas.printf("%.2fs %s", (float)si.length / SAMPLE_RATE, si.fmt == FMT_ULAW ? "LO-FI" : "16BIT");
         }
-        for (int s = 0; s < k.nSlices; s++) {
-            int x = wx + 1 + (int)((uint64_t)k.slice[s] * (ww - 2) / len);
-            canvas.drawFastVLine(x, wy + 1, (s == k.lastSlice) ? wh - 2 : 5, (s == k.lastSlice) ? COL_TEXT : COL_DIM);
-        }
-        int px = wx + 1 + (int)((uint64_t)k.playFrame * (ww - 2) / len);
-        if (k.v[k.cur].active) canvas.drawFastVLine(constrain(px, wx + 1, wx + ww - 2), wy + 1, wh - 2, COL_HOT);
-        canvas.setTextColor(COL_DIM);
-        canvas.setCursor(wx, wy + wh + 3);
-        canvas.printf("%.2fs %s", (float)len / SAMPLE_RATE, g_samples[k.slot].fmt == FMT_ULAW ? "LO-FI" : "16BIT");
-    }
-    // real cutoff + pump activity
+    } else drawScope(wx, wy, ww, wh);
+    drawCutPump(wx, 84, ww, true);
     canvas.setTextColor(COL_DIM);
-    canvas.setCursor(wx, 84);  canvas.print("CUT");
-    canvas.drawRect(wx + 22, 84, 66, 7, COL_GRID);
-    canvas.fillRect(wx + 23, 85, (int)(g_cutNow * 64.0f / 255.0f), 5, COL_AMBER);
-    canvas.setCursor(wx, 95);  canvas.print("PMP");
-    canvas.drawRect(wx + 22, 95, 66, 7, COL_GRID);
-    canvas.fillRect(wx + 23, 96, (int)(g_pumpNow * g_fx.pump * 0.64f), 5, COL_HOT);
     canvas.setCursor(wx, 106); canvas.printf("free %uK", (unsigned)(samplerFreeBytes() / 1024));
 }
 
-static void drawSoundPage() {
-    if (trackIsDeck(g_curTrack)) { drawDeckSound(trackDeck(g_curTrack)); return; }
-
-    bool onDrums = (g_curTrack == TRK_DRUMS);
+// ---------- SETTINGS page, lid open: the focused row, large ----------
+// The list itself is on the lid. This is what the row is doing.
+static void drawFocusPage() {
+    char title[24], name[24], val[28];
+    uint8_t rows = uiRowCount(), row = (g_soundParam < rows) ? g_soundParam : 0;
+    uiTrackTitle(title, sizeof(title));
+    uiRowText(row, name, sizeof(name), val, sizeof(val));
     canvas.setTextColor(trackCols[g_curTrack]);
-    canvas.setCursor(2, 14);
-    if (onDrums) {
-        DrumLane& d = g_drumLanes[g_curDrumLane];
-        canvas.printf("DRUM LANE %d  [%s]", g_curDrumLane + 1, engNames[d.engine]);
-    } else {
-        canvas.printf("SYNTH %d", g_curTrack + 1);
-    }
+    canvas.setCursor(2, 14); canvas.print(title);
+    canvas.setTextColor(COL_DIM);
+    canvas.setCursor(204, 14); canvas.printf("%2u/%u", row + 1, rows);
+    canvas.setTextSize(2);
+    canvas.setTextColor(COL_TEXT);  canvas.setCursor(2, 25); canvas.print(name);
+    canvas.setTextColor(COL_AMBER); canvas.setCursor(2, 43); printClipped(val, 19);
+    canvas.setTextSize(1);
 
-    // scope
-    canvas.drawRect(150, 24, 88, 44, COL_GRID);
-    int prevY = 46;
-    for (int i = 0; i < 86 && i * 2 < g_scopeIdx; i++) {
-        int yy = 46 - (int)(g_scopeBuf[i * 2] * 20.0f);
-        yy = constrain(yy, 25, 66);
-        canvas.drawLine(151 + i - 1, prevY, 151 + i, yy, COL_SYNTH2);
-        prevY = yy;
-    }
-    g_scopeIdx = 0;
+    uint8_t dr = uiRowDeckRow(row);
+    const int by = 62, bh = 48;
+    if (dr >= DR_BLEND && dr <= DR_POLES)   drawFilterCurve(0, by, SCREEN_W, bh);
+    else if (trackIsDeck(g_curTrack))       drawWave(trackDeck(g_curTrack), 0, by, SCREEN_W, bh);
+    else                                    drawScope(0, by, SCREEN_W, bh);
+    drawCutPump(2, 114, SCREEN_W - 4, false);
+}
 
-    int y = 26;
-    char val[24];
-
-    if (!onDrums) {
-        SynthTrack& trk = g_synths[g_curTrack];
-        SynthVoice& v = trk.v[0];
-        const char* names[] = {"OSC","WTABLE","CUTOFF","RESO","ENV AMT","FLT DEC","AMP DEC","VOLUME","VOICES"};
-        for (int r = 0; r < 9; r++) {
-            bool sel = (g_soundParam == r);
-            canvas.setTextColor(sel ? COL_TEXT : COL_DIM);
-            canvas.setCursor(2, y);
-            canvas.printf("%s%-8s", sel ? ">" : " ", names[r]);
-            switch (r) {
-                case 0: canvas.print(oscNames[v.oscMode]); break;
-                case 1: canvas.print(g_wtNames[v.wtIndex]);
-                        if (v.oscMode != OSC_WT) { canvas.setTextColor(COL_GRID); canvas.print(" (off)"); }
-                        break;
-                case 2: drawBar(64, y, v.fltCutoff);  break;
-                case 3: drawBar(64, y, v.fltReso);    break;
-                case 4: drawBar(64, y, v.fltEnvAmt);  break;
-                case 5: drawBar(64, y, (v.filtDecRate - 0.995f) / 0.00495f); break;
-                case 6: drawBar(64, y, (v.ampDecRate  - 0.999f) / 0.00099f); break;
-                case 7: drawBar(64, y, v.volume);     break;
-                case 8: canvas.printf("%u %s", trk.voices,
-                                      trk.voices > 1 ? "POLY" : "MONO(303)");
-                        break;
-            }
-            y += 11;    // 9 rows must clear the footer bar
-        }
-    } else {
-        DrumLane& d = g_drumLanes[g_curDrumLane];
-        const char* names[] = {"LANE","ENGINE","TYPE","VOLUME","TUNE","DECAY","CHOKE"};
-        for (int r = 0; r < 7; r++) {
-            bool sel = (g_soundParam == r);
-            canvas.setTextColor(sel ? COL_TEXT : COL_DIM);
-            canvas.setCursor(2, y);
-            canvas.printf("%s%-8s", sel ? ">" : " ", names[r]);
-            switch (r) {
-                case 0: canvas.printf("%d%s", g_curDrumLane + 1, g_curDrumLane == 0 ? " (pumps)" : ""); break;
-                case 1: canvas.print(engNames[d.engine]); break;
-                case 2:
-                    if (d.engine == ENG_SMPL) {
-                        if (samplerValid(d.sampleSlot)) printClipped(g_samples[d.sampleSlot].name, 14);
-                        else { canvas.setTextColor(COL_GRID); canvas.print("(no sample)"); }
-                    } else {
-                        canvas.print(d.engine == ENG_909 ? type909[d.type % DT_COUNT] : type808[d.type % DT_COUNT_808]);
-                    }
-                    break;
-                case 3: drawBar(64, y, d.volume); break;
-                case 4: snprintf(val, sizeof(val), "%+.1f st", d.tune); canvas.print(val); break;
-                case 5: snprintf(val, sizeof(val), "%.2fx", d.decay);   canvas.print(val); break;
-                case 6: if (d.chokeGroup) canvas.printf("GRP %u", d.chokeGroup);
-                        else canvas.print("OFF");
-                        break;
-            }
-            y += 12;
-        }
+// ---------- PATTERN page, lid open: both decks, full width ----------
+// The grid is on the lid. Pads you play light up here.
+static void drawDecksPage() {
+    for (int d = 0; d < NUM_DECKS; d++) {
+        const Deck& k = g_decks[d];
+        int y0 = 13 + d * 56;
+        drawWave((uint8_t)d, 0, y0, SCREEN_W, 45);
+        char b[56];
+        if (!deckLoaded(d))            snprintf(b, sizeof(b), "DECK %c empty - PG: SAMPLE loads one", 'A' + d);
+        else if (k.mode == DECK_CHOP)  snprintf(b, sizeof(b), "%c CHOP %u  %.40s", 'A' + d, k.nSlices, k.name);
+        else if (k.fitBars)            snprintf(b, sizeof(b), "%c LOOP %u bar  %.36s", 'A' + d, k.fitBars, k.name);
+        else                           snprintf(b, sizeof(b), "%c LOOP FIT?  %.38s", 'A' + d, k.name);
+        bool sel = (g_curTrack == TRK_DECK_A + d);
+        canvas.setTextColor(k.mute ? COL_GRID : (sel ? COL_TEXT : trackCols[TRK_DECK_A + d]));
+        canvas.setCursor(2, y0 + 47);
+        printClipped(b, 39);
     }
 }
 
@@ -656,51 +711,22 @@ static void drawSongPage() {
     }
 }
 
-// ---------- HELP page ----------
-static void drawHelpPage() {
-    const int steps = HELP_STEP_LINES, keys = HELP_KEY_LINES;
-    int y = 14;
-    for (int i = g_helpScroll; i < g_helpScroll + 10 && i < steps + keys + 4; i++) {
-        canvas.setCursor(2, y);
-        if (i < steps) {
-            canvas.setTextColor(g_helpSteps[i][0] != ' ' ? COL_TEXT : COL_DIM);
-            canvas.print(g_helpSteps[i]);
-        } else if (i < steps + keys) {
-            canvas.setTextColor(COL_DIM);
-            canvas.print(g_keyHelp[i - steps]);
-        } else {
-            canvas.setTextColor(COL_AMBER);
-            switch (i - steps - keys) {
-                case 0: canvas.printf("STYLES 4:%s 5:%s", g_styleNames[0], g_styleNames[1]); break;
-                case 1: canvas.printf("       6:%s 7:%s", g_styleNames[2], g_styleNames[3]); break;
-                case 2: canvas.printf("heap %uK  arena %uK  SD %s",
-                                      (unsigned)(ESP.getFreeHeap() / 1024), (unsigned)(g_arenaCap / 1024),
-                                      g_sdOk ? "OK" : "--"); break;
-                case 3: canvas.printf("LID %s (AUX toggles)%s", g_lidOk ? "OK" : "OFF",
-                                      ESP.getFreeHeap() < 24 * 1024 ? " LOW RAM" : ""); break;
-            }
-        }
-        y += 11;
-    }
-}
-
 // ---------- draw dispatch ----------
 void uiDraw() {
     canvas.fillSprite(COL_BG);
     drawHeader();
     switch (g_curPage) {
-        case PAGE_PATTERN: drawPatternPage();
+        case PAGE_PATTERN:
+            if (g_lidOk) drawDecksPage(); else drawPatternPage();
             drawFooter(statusLine()); break;
-        case PAGE_SOUND:   drawSoundPage();
-            drawFooter(trackIsDeck(g_curTrack) ? "v c row  x b adjust  keys=chops"
-                                               : "v c row  x b adjust  m=fine"); break;
+        case PAGE_SETTINGS:
+            if (g_lidOk) drawFocusPage(); else drawSettingsPage();
+            drawFooter("; . row   , / change   m = fine"); break;
         case PAGE_SAMPLE:  drawSamplePage();
-            drawFooter(s_listIsLoops ? ".:load  4:deckA 5:deckB  3:drums"
-                                     : ".:preview 4..-:lane  3:decks"); break;
-        case PAGE_SONG:    drawSongPage();
+            drawFooter(s_listIsLoops ? "c:load  4:deckA 5:deckB  3:drums"
+                                     : "c:preview 4..-:lane  3:decks"); break;
+        default:           drawSongPage();
             drawFooter("4..-:set e/u:cut tab/p:x z:clr"); break;
-        default:           drawHelpPage();
-            drawFooter("FILTRE  v c scroll  4-7 style"); break;
     }
     canvas.pushSprite(0, 0);
 }

@@ -235,6 +235,7 @@ static void voiceStart(Deck& k, float start, float end, float inc, float vel, bo
     v.data  = smpData(s);
     v.fmt   = s.fmt;
     v.start = start; v.end = end;
+    v.lim   = (float)s.length - 2.0f;
     v.inc   = inc;
     v.pos   = (inc >= 0) ? start : end - 1.0f;
     v.vel   = vel;
@@ -280,6 +281,9 @@ static inline float voiceRender(ChopVoice& v) {
         v.gain += DECK_FADE_IN;
         if (v.gain > 1.0f) v.gain = 1.0f;
     }
+    // a retrigger fades the old voice wherever it is: on the last slice that
+    // runs past the sample, and past the arena if the sample sits at its end
+    if (v.pos < 0.0f || v.pos > v.lim) { v.active = false; return 0.0f; }
     uint32_t i = (uint32_t)v.pos;
     float frac = v.pos - (float)i;
     float a = smpRead(v.data, v.fmt, i), b = smpRead(v.data, v.fmt, i + 1);
