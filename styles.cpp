@@ -192,7 +192,7 @@ bool loadDemoPattern() {
     g_song[3] = { 3, 1, SLOT_MUTE_T1, 51 };      // back down, loop to slot 2
     g_songLoopStart = 1;
     g_fx.cutoff = 36;
-    g_curPattern = 0;
+    g_curPattern = g_nextPattern = 0;
     g_songMode = true;
     engineUnlock();
     return deckLoaded(0);

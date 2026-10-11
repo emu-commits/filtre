@@ -16,6 +16,7 @@ struct SynthVoice {
     float   targetFreq;
     OscMode oscMode;
     uint8_t wtIndex;
+    float   uni[WT_UNISON_MAX - 1];   // phases of the detuned copies (unison tables)
 
     // State Variable Filter
     float fltLP, fltBP;
@@ -36,6 +37,7 @@ struct SynthVoice {
     void init() {
         phase = 0; freq = 0; targetFreq = 0;
         oscMode = OSC_SAW; wtIndex = 0;
+        uni[0] = 0.37f; uni[1] = 0.71f; uni[2] = 0.13f; uni[3] = 0.59f;   // free-running, never in step
         fltLP = 0; fltBP = 0;
         fltCutoff = 0.4f; fltReso = 0.3f; fltEnvAmt = 0.5f;
         ampEnv = 0;  ampDecRate  = 0.99985f;
@@ -59,13 +61,27 @@ struct SynthVoice {
         active = true;
     }
 
+    // unison tables: the centre copy plus pairs detuned either way
+    inline float wtUnison(uint8_t n) {
+        static const float k_det[WT_UNISON_MAX - 1] = { -1.0f, 1.0f, -0.53f, 0.57f };
+        float s = wavetableRead(wtIndex, phase);
+        float inc = freq * INV_SAMPLE_RATE, sp = inc * g_wtSpread[wtIndex];
+        for (uint8_t i = 0; i + 1 < n; i++) {
+            uni[i] += inc + k_det[i] * sp;
+            if (uni[i] >= 1.0f) uni[i] -= 1.0f;
+            s += wavetableRead(wtIndex, uni[i]);
+        }
+        return s * (n > 3 ? 0.40f : 0.55f);     // about the loudness of one copy
+    }
+
     inline float oscillator() {
         switch (oscMode) {
             case OSC_SAW: return 2.0f * phase - 1.0f;
             case OSC_SQR: return (phase < 0.5f) ? 0.7f : -0.7f;
             case OSC_TRI: return (phase < 0.5f) ? (4.0f * phase - 1.0f) : (3.0f - 4.0f * phase);
             case OSC_SIN: return sinf(phase * TWO_PI_F);
-            case OSC_WT:  return wavetableRead(wtIndex, phase);
+            case OSC_WT:  return g_wtUnison[wtIndex] > 1 ? wtUnison(g_wtUnison[wtIndex])
+                                                         : wavetableRead(wtIndex, phase);
             default:      return 0.0f;
         }
     }

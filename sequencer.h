@@ -93,7 +93,14 @@ struct Pattern {
     uint8_t   lock[NUM_STEPS];              // per-step cutoff lock, 0..255
     uint32_t  lockSet;                      // bit n = step n has a lock
     uint8_t   length;                       // 16 or 32 (0 reads as 16)
+    uint16_t  mute;                         // MUTE_*: one bit per grid row
 };
+// Mutes belong to the pattern: T1 T2 T3, deck A B, drum lanes 1..8
+#define MUTE_SYNTH(s)  (1u << (s))
+#define MUTE_DECK(d)   (1u << (NUM_SYNTHS + (d)))
+#define MUTE_LANE(l)   (1u << (NUM_SYNTHS + NUM_DECKS + (l)))
+#define MUTE_ALL_LANES (0xFFu << (NUM_SYNTHS + NUM_DECKS))
+#define MUTE_MASK      ((1u << (NUM_SYNTHS + NUM_DECKS + NUM_DRUM_LANES)) - 1)
 static inline uint8_t patLen(const Pattern& p) { return p.length == NUM_STEPS ? NUM_STEPS : STEPS_PER_BAR; }
 
 // song slot: a pattern, how many times it plays, who is silent, where the filter ends up
@@ -122,8 +129,6 @@ extern uint8_t    g_songLoopStart;
 
 extern SynthTrack g_synths[NUM_SYNTHS];
 extern DrumLane   g_drumLanes[NUM_DRUM_LANES];
-extern bool       g_synthMute[NUM_SYNTHS];
-extern bool       g_drumMute;
 
 // transport (written by the audio thread)
 extern volatile bool    g_playing;
@@ -148,6 +153,7 @@ extern uint8_t    g_stemMask;             // which groups reach the mix (bounce)
 
 // edit state
 extern uint8_t    g_curPattern;     // pattern being edited/viewed
+extern uint8_t    g_nextPattern;    // pattern the transport takes when this one ends
 extern uint8_t    g_curTrack;       // 0..2 synth, 3 = drums, 4/5 = deck A/B
 extern uint8_t    g_curStep;
 extern uint8_t    g_curDrumLane;    // selected lane 0..7
@@ -168,8 +174,7 @@ static inline void seqTick() {      // once per sample
     if (g_playing) { if (g_seqNow == g_seqNextAt) seqFireStep(); g_seqNow++; }
 }
 float seqCutoffTick();              // once per sample: effective cutoff 0..255
-bool  seqSynthMuted(uint8_t s);
-bool  seqDrumsMuted();
+uint16_t seqMuteMask();             // MUTE_* in force now: the pattern's, plus the song slot's
 bool  seqDeckMuted(uint8_t d);
 void  engineStopSampleVoices();     // arena is about to move
 
@@ -183,7 +188,9 @@ void touchCutoff();                 // the base cutoff was just moved by hand
 
 // pattern + lane helpers
 void clearPattern(uint8_t idx);
-void clonePatternTo(uint8_t dst);   // copy current pattern into slot dst
+void pastePattern(uint8_t src, uint8_t dst);
+void seqSelectPattern(uint8_t idx); // at once when stopped (or in song mode), else queued to the pattern's end
+bool seqFollowPattern();            // core 1, every pass: the edit view moves with a queued switch
 void triggerLaneLive(uint8_t lane); // audition a lane (choke-aware, no record)
 void setPatternLength(uint8_t idx, uint8_t len);   // 16 <-> 32 (duplicates bar 1 when growing)
 void songClearSlot(uint8_t i);

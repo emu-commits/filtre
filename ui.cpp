@@ -130,7 +130,7 @@ void uiDeckRowValue(uint8_t di, uint8_t row, char* o, size_t n) {
     bool has = deckLoaded(di);
     float len = has ? (float)g_samples[k.slot].length : 1.0f;
     static const char* sl[] = {"AUTO","4","8","16"};
-    static const char* ty[] = {"LOW PASS","HIGH PASS","BAND PASS"};
+    static const char* ty[] = {"LOW PASS","HIGH PASS","BAND PASS","PHASER"};
     static const char* ql[] = {"AUTO","16 BIT","LO-FI"};
     switch (row) {
         case DR_MODE:     snprintf(o, n, "%s", k.mode == DECK_LOOP ? "LOOP" : "CHOP"); break;
@@ -139,10 +139,12 @@ void uiDeckRowValue(uint8_t di, uint8_t row, char* o, size_t n) {
         case DR_LEVEL:    snprintf(o, n, "%d%%", (int)(k.level * 100 + 0.5f)); break;
         case DR_FIT:      if (k.fitBars) snprintf(o, n, "%u BAR", k.fitBars); else snprintf(o, n, "OFF"); break;
         case DR_BLEND:    snprintf(o, n, g_fx.blend < 64 ? "A %d" : g_fx.blend > 64 ? "B %d" : "A+B", abs((int)g_fx.blend - 64)); break;
-        case DR_CUTOFF:   snprintf(o, n, "%d%% %dHz", g_fx.cutoff * 100 / 255, (int)cutoffToHz(g_fx.cutoff)); break;
+        case DR_CUTOFF:   snprintf(o, n, "%d%% %dHz", g_fx.cutoff * 100 / 255,
+                                   (int)(g_fx.type == FLT_PHASER ? phaserHz(g_fx.cutoff) : cutoffToHz(g_fx.cutoff))); break;
         case DR_RESO:     snprintf(o, n, "%d%%", g_fx.reso * 100 / 127); break;
         case DR_TYPE:     snprintf(o, n, "%s", ty[g_fx.type % FLT_COUNT]); break;
-        case DR_POLES:    snprintf(o, n, "%s", g_fx.poles ? "24 dB" : "12 dB"); break;
+        case DR_POLES:    if (g_fx.type == FLT_PHASER) snprintf(o, n, "%d STAGE", PHASER_STAGES(g_fx.poles));
+                          else snprintf(o, n, "%s", g_fx.poles ? "24 dB" : "12 dB"); break;
         case DR_PUMP:     snprintf(o, n, "%u%%", g_fx.pump); break;
         case DR_RELEASE:  snprintf(o, n, "%u ms", g_fx.release); break;
         case DR_BASSPUMP: snprintf(o, n, "%u%%", g_fx.bassPump); break;
@@ -247,7 +249,9 @@ static void drawHeader() {
 
     canvas.setCursor(78, 2);
     uint8_t len = patLen(g_patterns[g_curPattern]);
-    if (len == NUM_STEPS) canvas.printf("PT%u.%u", g_curPattern + 1, g_curStep / STEPS_PER_BAR + 1);
+    if (g_playing && !g_songMode && g_nextPattern != g_curPattern)   // a switch is queued
+                          canvas.printf("PT%u>%u", g_curPattern + 1, g_nextPattern + 1);
+    else if (len == NUM_STEPS) canvas.printf("PT%u.%u", g_curPattern + 1, g_curStep / STEPS_PER_BAR + 1);
     else                  canvas.printf("PT%u", g_curPattern + 1);
     if (g_songMode) { canvas.setTextColor(COL_ACCENT); canvas.setCursor(112, 2); canvas.print("SNG"); }
 
@@ -312,11 +316,12 @@ static void drawPatternPage() {
     uint8_t len  = patLen(p);
     uint8_t base = (uint8_t)((g_curStep / STEPS_PER_BAR) * STEPS_PER_BAR);   // bar on screen
     bool here = g_playing && g_playPattern == g_curPattern;
+    const uint16_t mu = p.mute;
     int y = 13;
 
     // 3 synth rows (11 px pitch)
     for (int t = 0; t < NUM_SYNTHS; t++) {
-        canvas.setTextColor(g_synthMute[t] ? COL_GRID : trackCols[t]);
+        canvas.setTextColor((mu & MUTE_SYNTH(t)) ? COL_GRID : trackCols[t]);
         canvas.setCursor(2, y + 1);
         canvas.printf("%d", t + 1);
 
@@ -330,14 +335,14 @@ static void drawPatternPage() {
             canvas.drawRect(x, y, gw - 1, 10, (i % 4 == 0) ? COL_DIM : COL_GRID);
 
             if (!c.empty()) {
-                canvas.setTextColor(g_synthMute[t] ? COL_DIM : trackCols[t]);
+                canvas.setTextColor((mu & MUTE_SYNTH(t)) ? COL_DIM : trackCols[t]);
                 canvas.setCursor(x + 1, y + 1);
                 canvas.print(noteNames[c.note[0]]);
                 // chord: one dot per extra note, top-right of the cell
                 for (int nn = 1; nn < MAX_POLY; nn++)
                     if (c.note[nn] != NOTE_EMPTY)
                         canvas.fillRect(x + gw - 3, y + 1 + (nn - 1) * 3, 2, 2,
-                                        g_synthMute[t] ? COL_DIM : trackCols[t]);
+                                        (mu & MUTE_SYNTH(t)) ? COL_DIM : trackCols[t]);
                 if (c.slide) canvas.drawFastHLine(x + 1, y + 8, gw - 3, COL_ACCENT);
             }
             if (t == g_curTrack && st == g_curStep)
@@ -352,13 +357,14 @@ static void drawPatternPage() {
         const Deck& k = g_decks[d];
         uint8_t col = trackCols[TRK_DECK_A + d];
         bool sel = (g_curTrack == TRK_DECK_A + d);
-        canvas.setTextColor(k.mute ? COL_GRID : (sel ? COL_TEXT : col));
+        const bool dmute = mu & MUTE_DECK(d);
+        canvas.setTextColor(dmute ? COL_GRID : (sel ? COL_TEXT : col));
         canvas.setCursor(2, y);
         canvas.print(d ? "B" : "A");
 
         if (deckLoaded(d) && k.mode == DECK_LOOP) {
             canvas.drawRect(gx, y, STEPS_PER_BAR * gw - 1, 8, sel ? COL_DIM : COL_GRID);
-            canvas.setTextColor(k.mute ? COL_DIM : col);
+            canvas.setTextColor(dmute ? COL_DIM : col);
             canvas.setCursor(gx + 3, y);
             if (k.fitBars) canvas.printf("LOOP %u BAR", k.fitBars); else canvas.print("LOOP  FIT?");
             canvas.setCursor(gx + 76, y);
@@ -376,7 +382,7 @@ static void drawPatternPage() {
                 if (CHOP_SLICE(c) && (c & CHOP_ACC)) bg = COL_ACCBG;
                 canvas.fillRect(x, y, gw - 1, 8, bg);
                 if (CHOP_SLICE(c)) {
-                    canvas.setTextColor(k.mute ? COL_DIM : col);
+                    canvas.setTextColor(dmute ? COL_DIM : col);
                     canvas.setCursor(x + 4, y);
                     canvas.print(sliceChar[CHOP_SLICE(c) - 1]);
                 } else {
@@ -402,9 +408,10 @@ static void drawPatternPage() {
     for (int row = 0; row < NUM_DRUM_LANES; row++) {
         int l = NUM_DRUM_LANES - 1 - row;             // visual row -> lane
         bool sel = (g_curTrack == TRK_DRUMS && g_curDrumLane == l);
+        const bool lmute = mu & MUTE_LANE(l);
         // 7 px rows: number every other lane, and always the selected one
         if (sel || (l % 2 == 0 && !(g_curTrack == TRK_DRUMS && abs((int)g_curDrumLane - l) == 1))) {
-            canvas.setTextColor(g_drumMute ? COL_GRID : (sel ? COL_TEXT : COL_DRUMS));
+            canvas.setTextColor(lmute ? COL_GRID : (sel ? COL_TEXT : COL_DRUMS));
             canvas.setCursor(2, y - 1);
             canvas.printf("%d", l + 1);
         }
@@ -413,7 +420,7 @@ static void drawPatternPage() {
             int st = base + i, x = gx + i * gw;
             bool hit = p.drums[st] & (1 << l);
             bool acc = p.drumAcc[st] & (1 << l);
-            uint8_t col = hit ? (g_drumMute ? COL_DIM : (acc ? COL_ACCENT : COL_DRUMS)) : COL_GRID;
+            uint8_t col = hit ? (lmute ? COL_DIM : (acc ? COL_ACCENT : COL_DRUMS)) : COL_GRID;
             if (here && st == g_lastStep && hit) col = COL_TEXT;
             canvas.fillRect(x + 3, y + 1, gw - 7, 4, col);
             if (sel && st == g_curStep)
@@ -432,7 +439,7 @@ static void drawWave(uint8_t di, int wx, int wy, int ww, int wh) {
     uint32_t len = g_samples[k.slot].length;
     if (!len) return;
     const int iw = ww - 2, x0 = wx + 1, mid = wy + wh / 2, amp = wh / 2 - 2;
-    uint8_t col = k.mute ? COL_DIM : trackCols[TRK_DECK_A + di];
+    uint8_t col = seqDeckMuted(di) ? COL_DIM : trackCols[TRK_DECK_A + di];
     for (int x = 0; x < iw; x++) {
         int o = x * OV_W / iw;
         int hi = mid - k.ovMax[o] * amp / 128, lo = mid - k.ovMin[o] * amp / 128;
@@ -469,6 +476,18 @@ static void drawFilterCurve(int x0, int y0, int w, int h) {
     float fc = cutoffToHz(g_fx.cutoff);
     float q  = 0.6f * powf(20.0f, (float)g_fx.reso / 127.0f);
     int px = 0, py = 0;
+    if (g_fx.type == FLT_PHASER) {                    // the notches, at the centre of the sweep
+        const float pc = phaserHz(g_fx.cutoff), n = (float)PHASER_STAGES(g_fx.poles);
+        for (int x = 2; x < w - 2; x++) {
+            float f = 40.0f * powf(11000.0f / 40.0f, (float)(x - 2) / (float)(w - 5));
+            float m = fabsf(cosf(n * atanf(f / pc)));
+            float db = 20.0f * log10f(m > 0.02f ? m : 0.02f);
+            int y = constrain(y0 + h * 3 / 10 - (int)(db * (float)h / 50.0f), y0 + 1, y0 + h - 2);
+            if (x > 2) canvas.drawLine(px, py, x0 + x, y, COL_AMBER);
+            px = x0 + x; py = y;
+        }
+        return;
+    }
     for (int i = 0; i < 60; i++) {
         float f = 40.0f * powf(11000.0f / 40.0f, (float)i / 59.0f);
         float r = f / fc, r2 = r * r;
@@ -581,7 +600,7 @@ static void drawDecksPage() {
         else if (k.fitBars)            snprintf(b, sizeof(b), "%c LOOP %u bar  %.36s", 'A' + d, k.fitBars, k.name);
         else                           snprintf(b, sizeof(b), "%c LOOP FIT?  %.38s", 'A' + d, k.name);
         bool sel = (g_curTrack == TRK_DECK_A + d);
-        canvas.setTextColor(k.mute ? COL_GRID : (sel ? COL_TEXT : trackCols[TRK_DECK_A + d]));
+        canvas.setTextColor(seqDeckMuted(d) ? COL_GRID : (sel ? COL_TEXT : trackCols[TRK_DECK_A + d]));
         canvas.setCursor(2, y0 + 47);
         printClipped(b, 39);
     }
@@ -721,12 +740,12 @@ void uiDraw() {
             drawFooter(statusLine()); break;
         case PAGE_SETTINGS:
             if (g_lidOk) drawFocusPage(); else drawSettingsPage();
-            drawFooter("; . row   , / change   m = fine"); break;
+            drawFooter("; . row   , / change   z = fine"); break;
         case PAGE_SAMPLE:  drawSamplePage();
-            drawFooter(s_listIsLoops ? "c:load  4:deckA 5:deckB  3:drums"
-                                     : "c:preview 4..-:lane  3:decks"); break;
+            drawFooter(s_listIsLoops ? "b:load here   hold 3/4: deck A/B"
+                                     : "b:preview   fn Aa a s d f g h: lane"); break;
         default:           drawSongPage();
-            drawFooter("4..-:set e/u:cut tab/p:x z:clr"); break;
+            drawFooter("[ ]:pattern e/u:cut tab/p:x c:clr"); break;
     }
     canvas.pushSprite(0, 0);
 }

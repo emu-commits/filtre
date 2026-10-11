@@ -41,13 +41,17 @@ void engineRender(int16_t* buf, int n, float outScale) {
         float bass  = g_synths[0].render();
         float synth = g_synths[1].render();
         float s3    = g_synths[2].render();
-        if (seqSynthMuted(0)) bass = 0.0f;
-        if (seqSynthMuted(1)) synth = 0.0f;
-        if (!seqSynthMuted(2)) synth += s3;
+        const uint16_t mute = seqMuteMask();
+        if (mute & MUTE_SYNTH(0)) bass = 0.0f;
+        if (mute & MUTE_SYNTH(1)) synth = 0.0f;
+        if (!(mute & MUTE_SYNTH(2))) synth += s3;
 
         float drums = 0.0f;
-        for (int d = 0; d < NUM_DRUM_LANES; d++) drums += g_drumLanes[d].render();
-        drums = seqDrumsMuted() ? 0.0f : drums * 0.6f;
+        for (int d = 0; d < NUM_DRUM_LANES; d++) {
+            float v = g_drumLanes[d].render();
+            if (!(mute & MUTE_LANE(d))) drums += v;
+        }
+        drums *= 0.6f;
 
         float decks = deckBusRender();
 

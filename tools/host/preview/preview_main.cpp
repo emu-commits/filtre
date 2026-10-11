@@ -64,7 +64,7 @@ int main() {
     g_curPage = PAGE_PATTERN; shot("01_pattern_deck");
 
     setPatternLength(0, NUM_STEPS); g_curStep = 21; g_curTrack = TRK_DRUMS; g_curDrumLane = 2;
-    uiStatus("CLONED>3 and a long status text!"); shot("02_pattern_bar2_status");
+    uiStatus("PASTE P1>P3: You sure?"); shot("02_pattern_bar2_status");
     g_fakeMs += 5000;
     g_holdProg = 0.6f; strcpy(g_holdLabel, "WRITE BASS"); shot("03_pattern_hold"); g_holdProg = 0;
 
@@ -72,6 +72,7 @@ int main() {
     g_soundParam = DR_CUTOFF; shot("05_sound_deck_cutoff");
     g_soundParam = DR_SETBPM; g_curTrack = TRK_DECK_B; g_fx.reso = 110; g_fx.poles = 0; shot("06_sound_deckB_end");
     g_fx.type = FLT_HP; g_soundParam = DR_TYPE; shot("07_sound_hp");
+    g_fx.type = FLT_PHASER; g_fx.poles = 1; shot("07b_sound_phaser"); g_soundParam = DR_POLES; shot("07c_sound_phaser_stages");
     g_fx.type = FLT_LP; g_fx.poles = 1; g_fx.reso = 44;
     g_curTrack = 0; g_soundParam = 2; shot("08_sound_synth");
     g_curTrack = TRK_DRUMS; g_curDrumLane = 0; g_soundParam = 2; shot("09_sound_drum");
@@ -105,6 +106,7 @@ int main() {
     deckUnload(0); deckUnload(1); g_songMode = false; g_recEnabled = false;
     // the key map, in each context
     g_keysOverlay = true;
+    g_patterns[g_curPattern].mute = MUTE_SYNTH(1) | MUTE_LANE(2);
     g_curPage = PAGE_PATTERN; g_curTrack = TRK_DRUMS; shot("17_keys_drums");
     g_curTrack = TRK_DECK_A; shot("18_keys_deck");
     g_curTrack = 0; shot("19_keys_synth");

@@ -12,8 +12,6 @@ uint8_t    g_songLoopStart = 0;
 
 SynthTrack g_synths[NUM_SYNTHS];
 DrumLane   g_drumLanes[NUM_DRUM_LANES];
-bool       g_synthMute[NUM_SYNTHS] = {false, false, false};
-bool       g_drumMute = false;
 
 volatile bool    g_playing     = false;
 volatile uint8_t g_playStep    = 0;
@@ -31,6 +29,7 @@ volatile bool g_cutHeld  = false;
 uint8_t    g_stemMask    = STEM_ALL;
 
 uint8_t    g_curPattern  = 0;
+uint8_t    g_nextPattern = 0;
 uint8_t    g_curTrack    = 0;
 uint8_t    g_curStep     = 0;
 uint8_t    g_curDrumLane = 0;
@@ -122,10 +121,20 @@ void sequencerInit() {
 }
 
 // ---------- mutes ----------
-bool seqSynthMuted(uint8_t s) { return g_synthMute[s] || (g_songMode && (g_slotMute & (1 << s))); }
-bool seqDrumsMuted()          { return g_drumMute || (g_songMode && (g_slotMute & SLOT_MUTE_DRUMS)); }
-bool seqDeckMuted(uint8_t d)  { return g_decks[d].mute || (g_songMode && (g_slotMute & (SLOT_MUTE_DECKA << d))); }
-static bool kickMuted()       { return seqDrumsMuted() || (g_songMode && (g_slotMute & SLOT_MUTE_KICK)); }
+// The pattern that is sounding carries the mutes; stopped, the one on screen.
+uint16_t seqMuteMask() {
+    uint16_t m = g_patterns[g_playing ? g_playPattern : g_curPattern].mute;
+    if (g_songMode) {
+        uint8_t sm = g_slotMute;
+        m |= sm & (SLOT_MUTE_T1 | SLOT_MUTE_T2 | SLOT_MUTE_T3);
+        if (sm & SLOT_MUTE_DRUMS) m |= MUTE_ALL_LANES;
+        if (sm & SLOT_MUTE_DECKA) m |= MUTE_DECK(0);
+        if (sm & SLOT_MUTE_DECKB) m |= MUTE_DECK(1);
+        if (sm & SLOT_MUTE_KICK)  m |= MUTE_LANE(0);
+    }
+    return m;
+}
+bool seqDeckMuted(uint8_t d)  { return seqMuteMask() & MUTE_DECK(d); }
 
 void engineStopSampleVoices() {
     for (int l = 0; l < NUM_DRUM_LANES; l++) g_drumLanes[l].smp.stop();
@@ -239,7 +248,7 @@ void seqFireStep() {
                 }
             }
         } else {
-            g_playPattern = g_curPattern;
+            g_playPattern = g_nextPattern;        // whatever was queued last
         }
     }
 
@@ -262,8 +271,9 @@ void seqFireStep() {
     }
 
     // --- synths ---
+    const uint16_t mute = seqMuteMask();
     for (int s = 0; s < NUM_SYNTHS; s++) {
-        if (seqSynthMuted(s) || (s_supSynth & (1 << s))) continue;
+        if ((mute & MUTE_SYNTH(s)) || (s_supSynth & (1 << s))) continue;
         const SynthCell& c = p.synth[s][step];
         bool mono = (g_synths[s].voices <= 1);
         for (int i = 0; i < (mono ? 1 : MAX_POLY); i++)
@@ -274,14 +284,12 @@ void seqFireStep() {
 
     // --- drums; lane 1 also drives the pump, muted or not when GHOST is on ---
     uint8_t mask = p.drums[step] & (uint8_t)~s_supDrums;
-    bool drumsOff = seqDrumsMuted();
     if (mask & 1) {
-        if (!kickMuted()) triggerLane(0, p.drumAcc[step] & 1);
+        if (!(mute & MUTE_LANE(0))) triggerLane(0, p.drumAcc[step] & 1);
         else if (g_fx.ghost) pumpTrigger();
     }
-    if (!drumsOff)
-        for (int l = 1; l < NUM_DRUM_LANES; l++)
-            if (mask & (1 << l)) triggerLane(l, p.drumAcc[step] & (1 << l));
+    for (int l = 1; l < NUM_DRUM_LANES; l++)
+        if ((mask & (1 << l)) && !(mute & MUTE_LANE(l))) triggerLane(l, p.drumAcc[step] & (1 << l));
 
     // --- decks ---
     for (int d = 0; d < NUM_DECKS; d++) {
@@ -410,7 +418,7 @@ void seqDrainEvents() {
 }
 
 // ---------- transport (core 1) ----------
-void sequencerStart(bool fromTop) { post(EV_START, fromTop, 0, 0); }
+void sequencerStart(bool fromTop) { g_nextPattern = g_curPattern; post(EV_START, fromTop, 0, 0); }
 void sequencerStop()              { post(EV_STOP, 0, 0, 0); }
 
 // ---------- live input (core 1) ----------
@@ -483,9 +491,28 @@ void touchCutoff() {
 }
 
 // ---------- pattern helpers ----------
-void clonePatternTo(uint8_t dst) {
-    if (dst >= NUM_PATTERNS) return;
-    if (dst != g_curPattern) g_patterns[dst] = g_patterns[g_curPattern];
+void pastePattern(uint8_t src, uint8_t dst) {
+    if (src >= NUM_PATTERNS || dst >= NUM_PATTERNS || src == dst) return;
+    g_patterns[dst] = g_patterns[src];
+    if (dst == g_curPattern && g_curStep >= patLen(g_patterns[dst])) g_curStep = 0;
+}
+
+void seqSelectPattern(uint8_t idx) {
+    idx %= NUM_PATTERNS;
+    g_nextPattern = idx;
+    if (g_playing && !g_songMode) return;         // the bar line decides (seqFireStep)
+    g_curPattern = idx;
+    if (g_curStep >= patLen(g_patterns[idx])) g_curStep = 0;
+}
+
+bool seqFollowPattern() {
+    if (!g_playing || g_songMode) return false;
+    uint8_t now = g_playPattern;
+    if (now == g_curPattern || now != g_nextPattern) return false;
+    g_curPattern = now;
+    if (g_curStep >= patLen(g_patterns[now])) g_curStep = 0;
+    g_needRedraw = true;
+    return true;
 }
 
 void setPatternLength(uint8_t idx, uint8_t len) {

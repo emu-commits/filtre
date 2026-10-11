@@ -10,6 +10,8 @@
 int16_t g_wavetables[NUM_WT_TOTAL][WT_SIZE];
 char    g_wtNames[NUM_WT_TOTAL][WT_NAME_LEN];
 uint8_t g_numWavetables = 0;
+uint8_t g_wtUnison[NUM_WT_TOTAL];
+float   g_wtSpread[NUM_WT_TOTAL];
 
 static void normalizeTable(float* buf) {
     float peak = 0.0001f;
@@ -102,6 +104,34 @@ void wavetableInitBuiltins() {
         dc /= WT_SIZE;  for (int i = 0; i < WT_SIZE; i++) buf[i] -= dc;
         normalizeTable(buf); commitTable(7, buf, "GRIT");
     }
+
+    // 8: STRINGS - bright and harmonic: a saw spectrum with the bow's lift
+    // around the 3rd..7th partials, three copies a few cents apart (ensemble)
+    for (int i = 0; i < WT_SIZE; i++) {
+        ph = TWO_PI_F * (float)i / WT_SIZE;
+        float s = 0;
+        for (int h = 1; h <= 24; h++) {
+            float d = (float)(h - 5);
+            s += sinf(h * ph) / (float)h * (1.0f + 1.3f * expf(-d * d / 7.0f));
+        }
+        buf[i] = s;
+    }
+    normalizeTable(buf); commitTable(8, buf, "STRINGS");
+    g_wtUnison[8] = 3; g_wtSpread[8] = 0.0040f;
+
+    // 9: SUPERSAW - a full saw (24 partials, edge smoothed against ringing),
+    // five copies spread about a fifth of a semitone
+    for (int i = 0; i < WT_SIZE; i++) {
+        ph = TWO_PI_F * (float)i / WT_SIZE;
+        float s = 0;
+        for (int h = 1; h <= 24; h++) {
+            float x = 3.14159265f * (float)h / 25.0f;
+            s += sinf(h * ph) / (float)h * (sinf(x) / x);
+        }
+        buf[i] = s;
+    }
+    normalizeTable(buf); commitTable(9, buf, "SUPERSAW");
+    g_wtUnison[9] = WT_UNISON_MAX; g_wtSpread[9] = 0.0120f;
 
     g_numWavetables = NUM_BUILTIN_WT;
 }

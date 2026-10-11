@@ -12,7 +12,8 @@ FxParams g_fx;
 volatile float g_cutNow  = 77.0f;
 volatile float g_pumpNow = 0.0f;
 
-bool seqDeckMuted(uint8_t d);            // sequencer.cpp: deck mute or song-slot mute
+bool seqDeckMuted(uint8_t d);            // sequencer.cpp: pattern mute or song-slot mute
+extern uint16_t g_bpm;                   // sequencer.cpp
 
 void fxDefaults() {
     g_fx.blend = 64;  g_fx.cutoff = 77;  g_fx.reso = 44;  g_fx.type = FLT_LP;  g_fx.poles = 1;
@@ -346,8 +347,53 @@ static inline void setCoef(SvfCoef& c, float g, float k) {
     c.a3 = g * c.a2;
 }
 
+// ---------- phaser (TYPE = PHASER) ----------
+// The slow whole-loop phaser of French house: a chain of first-order all-pass
+// stages mixed with the dry signal, so notches open where the chain is out of
+// phase. CUTOFF places the sweep (keys, recorded locks and song targets all
+// move it), a triangle LFO, one cycle per 4 bars, rocks it about an octave
+// either way, RESO is the feedback, SLOPE picks 4 stages (two notches, the
+// classic pedal) or 8 (four notches, denser).
+#define PH_MAX     8
+#define PH_DEPTH   0.9f                     // octaves either side of the centre
+static float s_phZ[PH_MAX];
+static float s_phA = 0.0f, s_phFb = 0.0f, s_phLast = 0.0f, s_phLfo = 0.0f;
+
+float phaserHz(float c) {
+    return 120.0f * powf(2.0f, c * (5.5f / 255.0f));    // 120 Hz .. ~5.4 kHz
+}
+
+static void updatePhaser() {
+    // called every 16 samples: 4 bars = 16 beats
+    s_phLfo += 16.0f * (float)g_bpm / (960.0f * (float)SAMPLE_RATE);
+    if (s_phLfo >= 1.0f) s_phLfo -= 1.0f;
+    float tri = (s_phLfo < 0.5f) ? 4.0f * s_phLfo - 1.0f : 3.0f - 4.0f * s_phLfo;
+    float fc = phaserHz(s_cutSm) * powf(2.0f, tri * PH_DEPTH);
+    if (fc < 40.0f) fc = 40.0f;
+    if (fc > SAMPLE_RATE * 0.45f) fc = SAMPLE_RATE * 0.45f;
+    float t = tanf(3.14159265f * fc * INV_SAMPLE_RATE);
+    s_phA  = (t - 1.0f) / (t + 1.0f);
+    s_phFb = (float)g_fx.reso * (0.8f / 127.0f);
+    // dry + wet at equal loudness whatever the feedback
+    s_comp = 0.92f * sqrtf(1.0f / (1.0f + 1.0f / (1.0f - s_phFb * s_phFb)));
+}
+
+static inline float phaserRun(float x) {
+    const int n = PHASER_STAGES(g_fx.poles);
+    float y = x + s_phLast * s_phFb;
+    for (int i = 0; i < n; i++) {
+        float o = s_phA * y + s_phZ[i];
+        s_phZ[i] = y - s_phA * o;
+        y = o;
+    }
+    if (y > 8.0f) y = 8.0f; else if (y < -8.0f) y = -8.0f;
+    s_phLast = y;
+    return x + y;
+}
+
 static void updateCoefs() {
     s_cutSm += (g_cutNow - s_cutSm) * 0.12f;            // ~6 ms glide: no zipper
+    if (g_fx.type == FLT_PHASER) { updatePhaser(); return; }
     float fc = cutoffToHz(s_cutSm);
     if (fc > SAMPLE_RATE * 0.49f) fc = SAMPLE_RATE * 0.49f;
     float g = tanf(3.14159265f * fc * INV_SAMPLE_RATE);
@@ -368,6 +414,7 @@ float deckBusRender() {
     float x = a * ga + b * gb;
 
     if ((s_ctl++ & 15) == 0) updateCoefs();
+    if (g_fx.type == FLT_PHASER) return phaserRun(x) * s_comp;
     float y = s_f1.run(x, s_c1.a1, s_c1.a2, s_c1.a3, s_c1.k, g_fx.type);
     if (g_fx.poles) y = s_f2.run(y, s_c2.a1, s_c2.a2, s_c2.a3, s_c2.k, g_fx.type);
     // a hot resonance must not blow up the state on the no-FPU-exception path
@@ -401,4 +448,6 @@ void fxReset() {
     s_duck = 0.0f; s_atk = 0; s_relFor = 0;
     s_cutSm = g_cutNow;
     s_ctl = 0;
+    memset(s_phZ, 0, sizeof(s_phZ));
+    s_phLast = 0.0f; s_phLfo = 0.0f;
 }

@@ -55,8 +55,7 @@ static void freshProject() {
     samplerClearAll();
     sequencerInit(); deckInit(); filtreDefaults();
     g_songMode = false; g_recEnabled = false; g_curPattern = 0; g_stemMask = STEM_ALL;
-    for (int i = 0; i < NUM_SYNTHS; i++) g_synthMute[i] = false;
-    g_drumMute = false;
+    g_nextPattern = 0;
 }
 static float stepLen() { return SAMPLE_RATE * 15.0f / g_bpm; }
 
@@ -297,6 +296,8 @@ int main() {
     {
         Pattern keep = g_patterns[1]; FxParams fx = g_fx; SongSlot sl = g_song[2];
         setPatternLength(1, NUM_STEPS); g_patterns[1].chop[0][20] = 4 | CHOP_ACC; g_patterns[1].lock[31] = 200; g_patterns[1].lockSet |= 1u << 31;
+        g_patterns[1].mute = MUTE_SYNTH(1) | MUTE_DECK(1) | MUTE_LANE(3);
+        g_patterns[5].mute = MUTE_LANE(0);
         keep = g_patterns[1];
         deckUnload(0); deckLoad(0, "FILTRE-DEMO.wav"); g_decks[0].mode = DECK_CHOP; deckNudgeSlice(0, 1, 30);
         Deck dk = g_decks[0]; g_fx.key = 4; g_fx.reso = 99; fx = g_fx; uint16_t bpm = g_bpm = 124;
@@ -305,6 +306,8 @@ int main() {
         CHECK(storageLoadProject(2), "load P3");
         CHECK(memcmp(&keep, &g_patterns[1], sizeof(Pattern)) == 0, "pattern (32 steps, chops, locks) identical");
         CHECK(memcmp(&fx, &g_fx, sizeof(FxParams)) == 0 && g_bpm == bpm, "fx + bpm identical");
+        CHECK(g_patterns[1].mute == (MUTE_SYNTH(1) | MUTE_DECK(1) | MUTE_LANE(3)) && g_patterns[5].mute == MUTE_LANE(0) && g_patterns[0].mute == 0,
+              "mutes come back per pattern (%03x %03x)", g_patterns[1].mute, g_patterns[5].mute);
         CHECK(memcmp(&sl, &g_song[2], sizeof(SongSlot)) == 0, "song slot identical");
         CHECK(deckLoaded(0) && g_decks[0].nSlices == dk.nSlices && memcmp(dk.slice, g_decks[0].slice, sizeof(dk.slice)) == 0 && g_decks[0].mode == DECK_CHOP, "deck + edited slices restored");
         CHECK(g_drumLanes[1].type == DT_CLAP9 && g_drumLanes[1].engine == ENG_909, "909 clap lane survives");
@@ -315,6 +318,90 @@ int main() {
         CHECK(any && patLen(g_patterns[0]) == 16 && g_song[0].repeats == 1 && g_song[0].target == TARGET_NONE, "v1 patterns + song migrated");
         sequencerStart(true); auto o = render(40000); quiet();
         CHECK(rms(o, 0, 40000) > 500, "v1 project makes sound");
+    }
+
+    SECTION("mutes live in the pattern; a pattern change waits for the bar");
+    {
+        freshProject();
+        g_fx.pump = 0; g_fx.swing = 50; g_stemMask = STEM_DRUMS;
+        uint32_t bar = (uint32_t)(stepLen() * 16);
+        pastePattern(0, 1); pastePattern(0, 2);
+        CHECK(memcmp(g_patterns[0].drums, g_patterns[2].drums, NUM_STEPS) == 0, "paste copies the pattern");
+        g_patterns[1].mute = MUTE_ALL_LANES;                   // pattern 2: every drum lane off
+        g_patterns[2].mute = MUTE_ALL_LANES & ~MUTE_LANE(0);   // pattern 3: kick only
+
+        sequencerStart(true); auto b1 = render(bar / 2);
+        seqSelectPattern(1); seqSelectPattern(2); seqSelectPattern(1);          // P+ P+ P-
+        CHECK(g_curPattern == 0 && g_nextPattern == 1, "queued, the editor has not moved (cur %u next %u)", g_curPattern, g_nextPattern);
+        auto b1b = render(bar / 2 - 200);
+        CHECK(g_playPattern == 0 && !seqFollowPattern(), "still on pattern 1 just before the bar line");
+        CHECK(rms(b1b, 0, b1b.size()) > 400, "pattern 1 keeps sounding to its end (%.0f)", rms(b1b, 0, b1b.size()));
+        render(400);
+        CHECK(g_playPattern == 1, "switched on the bar line (%u)", g_playPattern);
+        CHECK(seqFollowPattern() && g_curPattern == 1, "the editor follows");
+        auto b2 = render(bar - 1200);
+        CHECK(rms(b2, 3000, b2.size()) < 30, "pattern 2 carries its own mutes: drums silent (%.0f)", rms(b2, 3000, b2.size()));
+        seqSelectPattern(2); render(1400);
+        CHECK(g_playPattern == 2, "next queued pattern lands a bar later");
+        auto b3 = render(bar - 2000);
+        double all = rms(b1, 0, b1.size()), kick = rms(b3, 0, b3.size());
+        CHECK(kick > 300 && kick < all * 0.97, "pattern 3: the kick alone (%.0f vs all %.0f)", kick, all);
+        g_patterns[2].mute = 0; auto b3b = render(bar / 2);
+        seqFollowPattern();
+        quiet();
+        seqSelectPattern(5);
+        CHECK(g_curPattern == 5 && g_nextPattern == 5, "stopped: a pattern change is immediate");
+        g_stemMask = STEM_ALL;
+    }
+
+    SECTION("phaser: stable, level-matched, and it moves");
+    {
+        freshProject();
+        deckLoad(0, "noise.wav"); g_decks[0].mode = DECK_LOOP; g_decks[0].fitBars = 1;
+        g_fx.pump = 0; g_fx.reso = 0; g_stemMask = STEM_DECKS; memset(g_patterns[0].drums, 0, NUM_STEPS);
+        uint32_t bar = (uint32_t)(stepLen() * 16);
+        g_fx.type = FLT_LP; g_fx.cutoff = 255; fxReset(); sequencerStart(true); auto dry = render(bar); quiet();
+        g_fx.type = FLT_PHASER; g_fx.cutoff = 128; fxReset(); sequencerStart(true); auto ph = render(bar * 4); quiet();
+        double d = rms(dry, 2000, bar), w = rms(ph, 2000, bar * 4);
+        CHECK(w > d * 0.6 && w < d * 1.3, "phased loop about as loud as the dry one (%.0f vs %.0f)", w, d);
+        // a notch passes through 400 Hz as the sweep goes: a narrow probe there rises and falls over the 4 bars
+        double lo = 1e9, hi = 0;
+        const double rr = 0.985, cw = 2 * rr * cos(6.2831853 * 400.0 / SAMPLE_RATE);
+        for (int k = 0; k < 16; k++) {
+            double acc = 0, y1 = 0, y2 = 0; size_t a = (size_t)bar * k / 4, n = bar / 4;
+            for (size_t i = a; i < a + n; i++) { double y = ph[i] + cw * y1 - rr * rr * y2; y2 = y1; y1 = y; if (i > a + 800) acc += y * y; }
+            double r = sqrt(acc / n); if (r < lo) lo = r; if (r > hi) hi = r;
+        }
+        CHECK(hi > lo * 1.8, "the sweep carries a notch through 400 Hz (%.0f..%.0f)", lo, hi);
+        g_fx.reso = 127; int32_t pk = 0; bool finite = true;
+        for (int p8 = 0; p8 < 2; p8++) for (int c = 0; c <= 255; c += 15) {
+            g_fx.poles = p8; g_fx.cutoff = c; sequencerStart(true); auto o = render(bar / 4); quiet();
+            for (auto v : o) if (abs(v) > pk) pk = abs(v);
+        }
+        CHECK(finite && pk <= 26000, "full feedback, 4 and 8 stages: never past the clip ceiling (%d)", pk);
+        g_fx.type = FLT_LP; g_fx.poles = 1; g_stemMask = STEM_ALL;
+    }
+
+    SECTION("wavetables: STRINGS and SUPERSAW");
+    {
+        CHECK(g_numWavetables == NUM_BUILTIN_WT && !strcmp(g_wtNames[8], "STRINGS") && !strcmp(g_wtNames[9], "SUPERSAW"),
+              "%u built-in tables, last two %s %s", g_numWavetables, g_wtNames[8], g_wtNames[9]);
+        double ratio[3]; float peak = 0; const uint8_t tabs[3] = { 1, 8, 9 };
+        for (int t = 0; t < 3; t++) {
+            SynthVoice v; v.init(); v.oscMode = OSC_WT; v.wtIndex = tabs[t];
+            v.fltCutoff = 0.8f; v.fltEnvAmt = 0; v.fltReso = 0; v.ampDecRate = 1.0f; v.filtDecRate = 1.0f;
+            v.noteOn(220.0f, false, false);
+            double lo = 1e9, hi = 0;
+            for (int win = 0; win < 40; win++) {               // 2 s in 50 ms windows
+                double acc = 0;
+                for (int i = 0; i < SAMPLE_RATE / 20; i++) { float o = v.render(); acc += o * o; if (fabsf(o) > peak) peak = fabsf(o); }
+                double r = sqrt(acc / (SAMPLE_RATE / 20)); if (r < lo) lo = r; if (r > hi) hi = r;
+            }
+            ratio[t] = hi / lo;
+        }
+        CHECK(ratio[0] < 1.02, "a plain table holds still (%.3f)", ratio[0]);
+        CHECK(ratio[1] > 1.1 && ratio[2] > 1.2, "strings and supersaw beat against themselves (%.2f %.2f)", ratio[1], ratio[2]);
+        CHECK(peak < 1.6f, "unison stays in range (peak %.2f)", peak);
     }
 
     SECTION("bounce: mix + stems, bar aligned, equal length");

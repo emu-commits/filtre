@@ -1,7 +1,8 @@
 // ============================================================
 // FILTRE - storage.cpp
 // GBX v3 adds decks, FX, 32-step patterns, chop/lock lanes and song
-// slots with repeats, mutes and filter targets. v1/v2 still load.
+// slots with repeats, mutes and filter targets. v4 appends the per-pattern
+// mutes (a v3 file is a v4 file without that tail). v1/v2 still load.
 // ============================================================
 #include "storage.h"
 #include "styles.h"
@@ -12,11 +13,13 @@
 #include <stdlib.h>
 #include <SD.h>
 #include <string.h>
+#include <stddef.h>
 
 uint8_t g_curProject = 0;
 
 #define GBX_MAGIC   0x31584247u   // "GBX1"
-#define GBX_VERSION 3
+#define GBX_VERSION 4
+#define OLD_BUILTIN_WT 8           // before v4: user wavetables started here
 #define OLD_STEPS   16            // v1/v2 patterns were one bar
 
 // ---- serialized structures (POD, packed layout kept stable) ----
@@ -78,7 +81,7 @@ struct __attribute__((packed)) SavePattern {
 };
 struct __attribute__((packed)) SaveDeck {
     char     name[LOOP_NAME_LEN];          // file in /groovebox/loops, empty = none
-    uint8_t  mode, sliceMode, nSlices, fitBars, qual, startTenths, mute, reserved;
+    uint8_t  mode, sliceMode, nSlices, fitBars, qual, startTenths, mute, reserved;   // mute: v3 only
     float    pitch, level;
     uint32_t in, out;
     uint32_t slice[MAX_SLICES + 1];
@@ -99,7 +102,9 @@ struct __attribute__((packed)) ProjectFile {
     SaveFx       fx;
     SaveDeck     decks[NUM_DECKS];
     SavePattern  patterns[NUM_PATTERNS];
+    uint16_t     mutes[NUM_PATTERNS];      // v4: Pattern.mute
 };
+#define V3_SIZE offsetof(ProjectFile, mutes)
 
 static void slotPath(uint8_t slot, char* out, size_t n) {
     snprintf(out, n, "%s/P%u.gbx", DIR_PROJECTS, (unsigned)(slot + 1));
@@ -143,7 +148,7 @@ bool storageSaveProject(uint8_t slot) {
         SaveDeck& o = pf->decks[d];
         if (deckLoaded(d)) strncpy(o.name, k.name, LOOP_NAME_LEN - 1);
         o.mode = k.mode; o.sliceMode = k.sliceMode; o.nSlices = k.nSlices; o.fitBars = k.fitBars;
-        o.qual = k.qual; o.startTenths = k.startTenths; o.mute = k.mute;
+        o.qual = k.qual; o.startTenths = k.startTenths;
         o.pitch = k.pitch; o.level = k.level; o.in = k.in; o.out = k.out;
         memcpy(o.slice, k.slice, sizeof(o.slice));
     }
@@ -164,6 +169,7 @@ bool storageSaveProject(uint8_t slot) {
         memcpy(o.lock, src.lock, NUM_STEPS);
         o.lockSet = src.lockSet;
         o.length  = patLen(src);
+        pf->mutes[p] = src.mute;
     }
 
     char path[64]; slotPath(slot, path, sizeof(path));
@@ -176,11 +182,13 @@ bool storageSaveProject(uint8_t slot) {
 }
 
 // shared param/lane/song apply used by both format loaders
-static void applySynth(int s, const SaveSynth& in, uint8_t voices) {
+static void applySynth(int s, const SaveSynth& in, uint8_t voices, uint16_t version) {
     SynthTrack& t = g_synths[s];
+    uint8_t wt = in.wtIndex;
+    if (version < 4 && wt >= OLD_BUILTIN_WT) wt = (uint8_t)(wt + NUM_BUILTIN_WT - OLD_BUILTIN_WT);
     t.forEach([&](SynthVoice& v) {
         v.oscMode     = (OscMode)(in.oscMode < OSC_COUNT ? in.oscMode : OSC_SAW);
-        v.wtIndex     = (in.wtIndex < g_numWavetables) ? in.wtIndex : 0;
+        v.wtIndex     = (wt < g_numWavetables) ? wt : 0;
         v.fltCutoff   = in.cutoff;
         v.fltReso     = in.reso;
         v.fltEnvAmt   = in.envAmt;
@@ -227,7 +235,7 @@ static void applyDeck(int d, const SaveDeck& o) {
     k.sliceMode = o.sliceMode < SLICE_COUNT ? o.sliceMode : SLICE_AUTO;
     k.qual = o.qual < QUAL_COUNT ? o.qual : QUAL_AUTO;
     k.startTenths = o.startTenths;
-    k.mute = o.mute; k.pitch = o.pitch; k.level = o.level;
+    k.pitch = o.pitch; k.level = o.level;
     if (!o.name[0]) return;
     char name[LOOP_NAME_LEN];
     memcpy(name, o.name, LOOP_NAME_LEN); name[LOOP_NAME_LEN - 1] = 0;
@@ -264,8 +272,9 @@ bool storageLoadProject(uint8_t slot) {
     f.seek(0);
 
     size_t need = (version == 1) ? sizeof(ProjectFileV1)
-                : (version == 2) ? sizeof(ProjectFileV2) : sizeof(ProjectFile);
-    uint8_t* raw = (uint8_t*)malloc(need);
+                : (version == 2) ? sizeof(ProjectFileV2)
+                : (version == 3) ? V3_SIZE : sizeof(ProjectFile);
+    uint8_t* raw = (uint8_t*)calloc(1, sizeof(ProjectFile) > need ? sizeof(ProjectFile) : need);
     if (!raw) { f.close(); return false; }
     size_t got = f.read(raw, need);
     f.close();
@@ -275,7 +284,7 @@ bool storageLoadProject(uint8_t slot) {
     for (int d = 0; d < NUM_DECKS; d++) deckUnload(d);
     samplerClearAll();
 
-    if (version == 3) {
+    if (version >= 3) {
         ProjectFile* pf = (ProjectFile*)raw;
         g_bpm = pf->bpm;
         g_songLoopStart = pf->songLoopStart;
@@ -284,8 +293,12 @@ bool storageLoadProject(uint8_t slot) {
             if (g_song[i].repeats < 1 || g_song[i].repeats > MAX_REPEATS) g_song[i].repeats = 1;
             if (g_song[i].pattern >= NUM_PATTERNS) g_song[i].pattern = SONG_EMPTY;
         }
-        for (int s = 0; s < NUM_SYNTHS; s++) applySynth(s, pf->synths[s], pf->voices[s]);
+        for (int s = 0; s < NUM_SYNTHS; s++) applySynth(s, pf->synths[s], pf->voices[s], version);
         for (int l = 0; l < NUM_DRUM_LANES; l++) applyLane(l, pf->lanes[l]);
+        // v3 kept one mute per deck for the whole project
+        uint16_t oldMute = 0;
+        if (version == 3)
+            for (int d = 0; d < NUM_DECKS; d++) if (pf->decks[d].mute) oldMute |= MUTE_DECK(d);
         const SaveFx& x = pf->fx;
         g_fx.blend = x.blend; g_fx.cutoff = x.cutoff; g_fx.reso = x.reso;
         g_fx.type = x.type < FLT_COUNT ? x.type : FLT_LP; g_fx.poles = x.poles ? 1 : 0;
@@ -308,6 +321,7 @@ bool storageLoadProject(uint8_t slot) {
             memcpy(o.lock, in.lock, NUM_STEPS);
             o.lockSet = in.lockSet;
             o.length  = (in.length == NUM_STEPS) ? NUM_STEPS : STEPS_PER_BAR;
+            o.mute    = (version == 3) ? oldMute : (uint16_t)(pf->mutes[p] & MUTE_MASK);
         }
         for (int d = 0; d < NUM_DECKS; d++) applyDeck(d, pf->decks[d]);
     } else if (version == 2) {
@@ -316,7 +330,7 @@ bool storageLoadProject(uint8_t slot) {
         g_bpm = pf->bpm;
         g_songLoopStart = pf->songLoopStart;
         applyOldSong(pf->song);
-        for (int s = 0; s < NUM_SYNTHS; s++) applySynth(s, pf->synths[s], pf->voices[s]);
+        for (int s = 0; s < NUM_SYNTHS; s++) applySynth(s, pf->synths[s], pf->voices[s], version);
         for (int l = 0; l < NUM_DRUM_LANES; l++) applyLane(l, pf->lanes[l]);
         for (int p = 0; p < NUM_PATTERNS; p++) {
             for (int s = 0; s < NUM_SYNTHS; s++)
@@ -334,7 +348,7 @@ bool storageLoadProject(uint8_t slot) {
         g_bpm = pf->bpm;
         g_songLoopStart = pf->songLoopStart;
         applyOldSong(pf->song);
-        for (int s = 0; s < NUM_SYNTHS; s++) applySynth(s, pf->synths[s], 1);
+        for (int s = 0; s < NUM_SYNTHS; s++) applySynth(s, pf->synths[s], 1, version);
         for (int l = 0; l < NUM_DRUM_LANES; l++) applyLane(l, pf->lanes[l]);
         for (int p = 0; p < NUM_PATTERNS; p++) {
             for (int s = 0; s < NUM_SYNTHS; s++)

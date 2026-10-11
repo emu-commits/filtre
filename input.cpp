@@ -14,6 +14,7 @@
 #include "ui.h"
 #include "lid_ui.h"
 #include "mic_sampler.h"
+#include "kbd_reader.h"
 
 void inputInit();
 void inputUpdate();
@@ -49,10 +50,12 @@ static uint16_t s_rptCount = 0;
 
 // a question on screen ("LOAD: Are you sure?"): the same key again says yes,
 // any other key or a few seconds says no
-enum : uint8_t { CONF_NONE = 0, CONF_LOAD, CONF_SAVE, CONF_STYLE };
+enum : uint8_t { CONF_NONE = 0, CONF_LOAD, CONF_SAVE, CONF_STYLE, CONF_CLEAR, CONF_PASTE };
 #define CONFIRM_MS 4000
 static uint8_t  s_confKind = CONF_NONE, s_confAct = ACT_NONE, s_confArg = 0;
 static uint32_t s_confUntil = 0;
+
+static int8_t   s_copySrc = -1;        // pattern tagged by CPY, -1 = none yet
 
 static void confirmAsk(uint8_t kind, uint8_t act, uint8_t arg, const char* question) {
     s_confKind = kind; s_confAct = act; s_confArg = arg;
@@ -65,7 +68,7 @@ static uint32_t s_fltLastMs = 0, s_cutSince = 0;
 static float    s_cutAcc = 0.0f, s_resAcc = 0.0f;
 
 // ---------- helpers ----------
-static bool accentHeld(const KeySnap& s) { return s.has('m'); }
+static bool accentHeld(const KeySnap& s) { return s.has(KEY_ACCENT); }
 
 static uint8_t heldPianoCount(const KeySnap& s) {
     uint8_t c = 0;
@@ -351,6 +354,30 @@ static void doImmediate(uint8_t act, const KeySnap& now) {
             uiStatus(m); break;
         }
 
+        case ACT_PAT_DN: case ACT_PAT_UP: {
+            int dir = (act == ACT_PAT_UP) ? 1 : -1;
+            char m[24];
+            if (g_curPage == PAGE_SONG) {                 // the pattern in the slot under the cursor
+                SongSlot& sl = g_song[g_songCursor];
+                if (sl.pattern == SONG_EMPTY) {           // a new slot starts as the one before it
+                    uint8_t from = (g_songCursor && g_song[g_songCursor - 1].pattern != SONG_EMPTY)
+                                   ? g_song[g_songCursor - 1].pattern : g_curPattern;
+                    songClearSlot(g_songCursor);
+                    sl.pattern = from;
+                } else {
+                    sl.pattern = (uint8_t)((sl.pattern + dir + NUM_PATTERNS) % NUM_PATTERNS);
+                }
+                g_needRedraw = true; break;
+            }
+            bool queue = g_playing && !g_songMode;        // lands when the playing pattern ends
+            uint8_t to = (uint8_t)(((queue ? g_nextPattern : g_curPattern) + dir + NUM_PATTERNS) % NUM_PATTERNS);
+            seqSelectPattern(to);
+            if (!queue)                    snprintf(m, sizeof(m), "PATTERN %u", to + 1);
+            else if (to == g_playPattern)  snprintf(m, sizeof(m), "STAY ON P%u", to + 1);
+            else                           snprintf(m, sizeof(m), "NEXT: P%u", to + 1);
+            uiStatus(m); g_needRedraw = true; break;
+        }
+
         case ACT_ACCENT: break;   // pure modifier
         case ACT_KEYS:
             if (!g_lidOk) uiStatus("KEY MAP NEEDS THE LID");
@@ -378,52 +405,27 @@ static void loadLoop(uint8_t d) {
     g_needRedraw = true;
 }
 
+// the 13 mute keys / grid rows by name
+static void muteRowName(uint8_t i, char* o, size_t n) {
+    if (i < NUM_SYNTHS)                  snprintf(o, n, "T%u", i + 1);
+    else if (i < NUM_SYNTHS + NUM_DECKS) snprintf(o, n, "DECK %c", 'A' + i - NUM_SYNTHS);
+    else                                 snprintf(o, n, "LANE %u", i - NUM_SYNTHS - NUM_DECKS + 1);
+}
+
 // ---------- short actions (release < 450ms) ----------
 static void doShort(uint8_t act) {
-    // track select
-    if (act >= ACT_TRACK1 && act <= ACT_TRACK3) {
-        g_curTrack = (uint8_t)(act - ACT_TRACK1);
-        if (g_soundParam >= uiRowCount()) g_soundParam = 0;
-        if (g_curPage == PAGE_SAMPLE) uiScanSampleDir();
-        g_needRedraw = true; return;
-    }
-    if (act == ACT_TRACKD) {                              // drums -> deck A -> deck B -> drums
-        if (g_curTrack == TRK_DRUMS)        g_curTrack = TRK_DECK_A;
-        else if (g_curTrack == TRK_DECK_A)  g_curTrack = TRK_DECK_B;
-        else                                g_curTrack = TRK_DRUMS;
-        uiStatus(g_curTrack == TRK_DRUMS ? "DRUMS" : g_curTrack == TRK_DECK_A ? "DECK A" : "DECK B");
-        if (g_curPage == PAGE_SAMPLE) uiScanSampleDir();
-        g_soundParam = 0;
-        g_needRedraw = true; return;
-    }
-    // pattern keys: context
-    if (act >= ACT_PAT1 && act <= ACT_PAT8) {
-        uint8_t k = (uint8_t)(act - ACT_PAT1);
-        if (g_curPage == PAGE_SAMPLE) {
-            if (uiBrowsingLoops()) {
-                if (k < NUM_DECKS) loadLoop(k); else uiStatus("P1 = DECK A  P2 = DECK B");
-            } else if (g_fileCount) {
-                int slot = samplerLoad(g_fileList[g_fileSel]);
-                if (strlen(g_fileList[g_fileSel]) >= SAMPLE_NAME_LEN) uiStatus("NAME TOO LONG (31)");
-                else if (slot >= 0) {
-                    DrumLane& d = g_drumLanes[k];
-                    d.engine = ENG_SMPL; d.sampleSlot = (int8_t)slot; d.smp.init();
-                    uiStatus("ASSIGNED");
-                } else uiStatus("LOAD FAILED");
-                g_needRedraw = true;
-            }
-        } else if (g_curPage == PAGE_SONG) {
-            SongSlot& sl = g_song[g_songCursor];
-            if (sl.pattern == SONG_EMPTY) songClearSlot(g_songCursor);
-            sl.pattern = k;
-            g_songCursor = (g_songCursor + 1) % SONG_LENGTH;
-            g_needRedraw = true;
-        } else {
-            g_curPattern = k;
-            if (g_curStep >= curLen()) g_curStep = 0;
-            uiStatus("PATTERN"); g_needRedraw = true;
-        }
-        return;
+    // the top row: mute that grid row. Mutes live in the pattern, and the one
+    // you hear is the one that changes (in song mode that may not be on screen)
+    if (act >= ACT_MUTE_FIRST && act <= ACT_MUTE_LAST) {
+        uint8_t i = (uint8_t)(act - ACT_MUTE_FIRST);
+        uint8_t pat = g_playing ? (uint8_t)g_playPattern : g_curPattern;
+        uint16_t& mu = g_patterns[pat].mute;
+        mu ^= (uint16_t)(1u << i);
+        char nm[10], m[24];
+        muteRowName(i, nm, sizeof(nm));
+        if (pat != g_curPattern) snprintf(m, sizeof(m), "P%u %s %s", pat + 1, nm, (mu & (1u << i)) ? "MUTED" : "ON");
+        else                     snprintf(m, sizeof(m), "%s %s", nm, (mu & (1u << i)) ? "MUTED" : "ON");
+        uiStatus(m); g_needRedraw = true; return;
     }
 
     switch (act) {
@@ -436,6 +438,12 @@ static void doShort(uint8_t act) {
         case ACT_SAVE: {
             char m[24];
             snprintf(m, sizeof(m), "P%u hold=SAVE", g_curProject + 1);
+            uiStatus(m); break;
+        }
+        case ACT_COPY: {
+            char m[24];
+            s_copySrc = (int8_t)g_curPattern;
+            snprintf(m, sizeof(m), "P%u COPIED hold=PASTE", g_curPattern + 1);
             uiStatus(m); break;
         }
         case ACT_PAGE:
@@ -455,6 +463,7 @@ static void doShort(uint8_t act) {
 
         case ACT_SONG:
             g_songMode = !g_songMode;
+            g_nextPattern = g_curPattern;         // nothing stays queued across the switch
             uiStatus(g_songMode ? "SONG MODE" : "PATTERN MODE");
             g_needRedraw = true; break;
 
@@ -498,30 +507,15 @@ static void bounceProgress(float done, const char* what) {
 
 // ---------- long actions (held 450ms) ----------
 static void doLong(uint8_t act) {
-    if (act >= ACT_TRACK1 && act <= ACT_TRACK3) {
-        uint8_t t = (uint8_t)(act - ACT_TRACK1);
-        g_synthMute[t] = !g_synthMute[t];
-        uiStatus(g_synthMute[t] ? "MUTED" : "UNMUTED");
-        g_needRedraw = true; return;
-    }
-    if (act == ACT_TRACKD) {                              // mutes whatever TD is on
-        if (trackIsDeck(g_curTrack)) {
-            Deck& k = g_decks[trackDeck(g_curTrack)];
-            k.mute = !k.mute;
-            uiStatus(k.mute ? "DECK MUTED" : "DECK ON");
-        } else {
-            g_drumMute = !g_drumMute;
-            uiStatus(g_drumMute ? "DRUMS MUTED" : "DRUMS ON");
-        }
-        g_needRedraw = true; return;
-    }
-    if (act >= ACT_PAT1 && act <= ACT_PAT8) {
-        uint8_t k = (uint8_t)(act - ACT_PAT1);
-        if (g_curPage == PAGE_SAMPLE || g_curPage == PAGE_SONG) return;
-        clonePatternTo(k);
-        g_curPattern = k;
-        char m[16]; snprintf(m, sizeof(m), "CLONED>%u", k + 1);
-        uiStatus(m); g_needRedraw = true; return;
+    if (act >= ACT_MUTE_FIRST && act <= ACT_MUTE_LAST) {     // hold = work on that row
+        uint8_t i = (uint8_t)(act - ACT_MUTE_FIRST);
+        if (i < NUM_SYNTHS)                  g_curTrack = i;
+        else if (i < NUM_SYNTHS + NUM_DECKS) g_curTrack = (uint8_t)(TRK_DECK_A + i - NUM_SYNTHS);
+        else { g_curTrack = TRK_DRUMS; g_curDrumLane = (uint8_t)(i - NUM_SYNTHS - NUM_DECKS); }
+        if (g_soundParam >= uiRowCount()) g_soundParam = 0;
+        if (g_curPage == PAGE_SAMPLE) uiScanSampleDir();
+        char nm[10]; muteRowName(i, nm, sizeof(nm));
+        uiStatus(nm); g_needRedraw = true; return;
     }
     switch (act) {
         case ACT_LOAD: case ACT_SAVE: {       // the hold only asks; the same key again does it
@@ -538,9 +532,21 @@ static void doLong(uint8_t act) {
             g_curPage = PAGE_PATTERN; g_needRedraw = true; break;
         case ACT_PLAY:
             sequencerStart(true); g_needRedraw = true; break;
-        case ACT_CLR:
-            clearPattern(g_curPattern);
-            uiStatus("PATTERN CLEARED"); g_needRedraw = true; break;
+        case ACT_CLR: {                       // asks, like LOAD / SAVE
+            char m[28];
+            snprintf(m, sizeof(m), "CLEAR P%u: Are you sure?", g_curPattern + 1);
+            confirmAsk(CONF_CLEAR, act, g_curPattern, m);
+            break;
+        }
+        case ACT_COPY: {                      // paste the tagged pattern over this one
+            char m[28];
+            if (s_copySrc < 0)                        { uiStatus("TAP CPY ON A PATTERN FIRST"); break; }
+            if ((uint8_t)s_copySrc == g_curPattern)   { snprintf(m, sizeof(m), "P%u IS THE COPY ITSELF", g_curPattern + 1);
+                                                        uiStatus(m); break; }
+            snprintf(m, sizeof(m), "PASTE P%u>P%u: You sure?", s_copySrc + 1, g_curPattern + 1);
+            confirmAsk(CONF_PASTE, act, (uint8_t)(s_copySrc | (g_curPattern << 4)), m);
+            break;
+        }
         case ACT_SONG:                        // long SONG = resample the mix
             if (!g_playing) uiStatus("PLAY, THEN HOLD");
             else if (!resampleArm(g_curTrack)) uiStatus("NO ROOM / BUSY");
@@ -561,7 +567,7 @@ static void doLong(uint8_t act) {
                 if (take > 0) snprintf(m, sizeof(m), "BOUNCED T%02d", take); else snprintf(m, sizeof(m), "BOUNCE FAILED");
                 uiStatus(m); g_needRedraw = true;
             } else if (micRecStart(g_curTrack, g_curDrumLane)) {
-                g_recPadKc = (uint8_t)'c';
+                g_recPadKc = (uint8_t)KEY_AUX;
             } else {
                 uiStatus("MIC BUSY / FULL");
             }
@@ -573,7 +579,6 @@ static void doLong(uint8_t act) {
 // label next to the hold bar; a few holds mean something else on some pages
 static const char* longName(uint8_t act) {
     if (act == ACT_AUX && g_curPage == PAGE_SONG) return "BOUNCE";
-    if ((g_curPage == PAGE_SAMPLE || g_curPage == PAGE_SONG) && act >= ACT_PAT1 && act <= ACT_PAT8) return "";
     return actLongName(act);
 }
 
@@ -592,6 +597,17 @@ static void confirmRun(uint8_t kind, uint8_t arg) {
             styleApply(arg, g_curPattern);
             uiStatus(g_styleNames[arg]);
             break;
+        case CONF_CLEAR:
+            clearPattern(arg);
+            uiStatus("PATTERN CLEARED");
+            break;
+        case CONF_PASTE: {
+            char m[16];
+            pastePattern(arg & 0x0F, arg >> 4);
+            snprintf(m, sizeof(m), "PASTED > P%u", (arg >> 4) + 1);
+            uiStatus(m);
+            break;
+        }
     }
     g_needRedraw = true;
 }
@@ -604,6 +620,21 @@ static void doPiano(uint8_t kc, const KeySnap& now) {
         int8_t bit = padSlotMute(kc);
         SongSlot& sl = g_song[g_songCursor];
         if (bit >= 0 && sl.pattern != SONG_EMPTY) { sl.mute ^= (uint8_t)(1 << bit); g_needRedraw = true; }
+        return;
+    }
+    if (g_curPage == PAGE_SAMPLE) {                       // pad = put this sample on that lane
+        int8_t lane = padLane(kc);
+        if (lane < 0 || uiBrowsingLoops() || !g_fileCount) return;
+        int slot = samplerLoad(g_fileList[g_fileSel]);
+        if (strlen(g_fileList[g_fileSel]) >= SAMPLE_NAME_LEN) uiStatus("NAME TOO LONG (31)");
+        else if (slot >= 0) {
+            char m[20];
+            DrumLane& d = g_drumLanes[lane];
+            d.engine = ENG_SMPL; d.sampleSlot = (int8_t)slot; d.smp.init();
+            snprintf(m, sizeof(m), "ON LANE %d", lane + 1);
+            uiStatus(m);
+        } else uiStatus("LOAD FAILED");
+        g_needRedraw = true;
         return;
     }
     if (g_curPage != PAGE_PATTERN && g_curPage != PAGE_SETTINGS) return;
@@ -659,8 +690,22 @@ void inputUpdate() {
     M5Cardputer.update();
     uint32_t nowMs = millis();
 
+    // the keyboard chip had to be rescued: say so, the old reader hung here
+    {
+        static uint16_t seen = 0;
+        uint16_t n = (uint16_t)(g_kbdLostEdge + g_kbdOverflow + g_kbdGpiInt);
+        if (n != seen) {
+            seen = n;
+            char m[28];
+            snprintf(m, sizeof(m), "KBD FIX E%u O%u G%u", g_kbdLostEdge, g_kbdOverflow, g_kbdGpiInt);
+            uiStatus(m);
+        }
+    }
+
     // -- CLR held while live-recording = erase at playhead --
-    if (g_playing && g_recEnabled && s_prev.has('z')) clearStepAtPlayhead();
+    if (g_playing && g_recEnabled && s_prev.has(KEY_CLR)) clearStepAtPlayhead();
+
+    seqFollowPattern();             // a queued pattern just came in: the editor goes with it
 
     filterKeysHeld(nowMs);
     if (s_confKind && (int32_t)(nowMs - s_confUntil) >= 0) s_confKind = CONF_NONE;   // nobody answered
@@ -742,7 +787,7 @@ void inputUpdate() {
         if (s_prev.has(kc)) continue;
 
         // a question is up: this key answers it (accent and the key map are not answers)
-        if (s_confKind && kc != 'm' && kc != KC_ENTER) {
+        if (s_confKind && kc != KEY_ACCENT && kc != KC_ENTER) {
             uint8_t kind = s_confKind;
             s_confKind = CONF_NONE;
             if (keyAction(kc) == s_confAct) { confirmRun(kind, s_confArg); continue; }
@@ -750,8 +795,9 @@ void inputUpdate() {
         }
 
         // piano/pads take priority over any action bound to the same key
-        if (pianoSemi(kc) >= 0 &&
-            (g_curPage == PAGE_PATTERN || g_curPage == PAGE_SETTINGS || g_curPage == PAGE_SONG)) {
+        if ((pianoSemi(kc) >= 0 &&
+             (g_curPage == PAGE_PATTERN || g_curPage == PAGE_SETTINGS || g_curPage == PAGE_SONG)) ||
+            (g_curPage == PAGE_SAMPLE && padLane(kc) >= 0 && !uiBrowsingLoops())) {
             doPiano(kc, now);
             continue;
         }

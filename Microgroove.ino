@@ -27,6 +27,7 @@
 #include "ui.h"
 #include "lid_ui.h"
 #include "styles.h"
+#include "kbd_reader.h"
 
 void inputInit();
 void inputUpdate();
@@ -36,6 +37,7 @@ bool g_sdOk = false;
 void setup() {
     auto cfg = M5.config();
     M5Cardputer.begin(cfg, true);
+    kbdReaderInstall();              // the library's reader can hang: see kbd_reader.cpp
 
     uiInit();
 
@@ -89,6 +91,14 @@ void setup() {
 }
 
 void loop() {
+    // a pass this long means core 1 was blocked, which also looks like dead keys
+    static uint32_t lastPass = 0;
+    uint32_t passMs = millis();
+    if (lastPass && passMs - lastPass > 400)
+        Serial.printf("LOOP: stalled %u ms (page %d, heap %u)\n",
+                      (unsigned)(passMs - lastPass), (int)g_curPage, (unsigned)ESP.getFreeHeap());
+    lastPass = passMs;
+
     inputUpdate();
     micSamplerUpdate();
     uiTick();

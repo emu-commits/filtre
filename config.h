@@ -58,7 +58,7 @@
 
 // ---------- Wavetables ----------
 #define WT_SIZE          256
-#define NUM_BUILTIN_WT   8
+#define NUM_BUILTIN_WT   10
 #define MAX_USER_WT      8
 #define NUM_WT_TOTAL     (NUM_BUILTIN_WT + MAX_USER_WT)
 #define WT_NAME_LEN      12

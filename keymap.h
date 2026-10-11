@@ -5,27 +5,31 @@
 // so it cannot drift from the bindings. There is no other help page.
 //
 //                       SHORT (tap)              LONG (hold 450 ms)
-// ` 1 2                 select track 1/2/3       mute track
-// 3   TD                drums -> deck A -> B     mute drums / that deck
-// 4 5 6 7 8 9 0 -       select pattern 1..8      clone current -> there
-//                       (SAMPLE pg: assign lane, or load deck A/B)
-//                       (SONG pg: place)
-// =                     LOAD info                "LOAD: Are you sure?"
+// ` 1 2                 mute T1 / T2 / T3        select that track
+// 3 4                   mute deck A / B          select that deck
+// 5 6 7 8 9 0 - =       mute drum lane 1..8      select that lane
+//                       (the 13 keys are the 13 grid rows; mutes belong
+//                        to the pattern and are saved with it)
+// [ ]                   pattern - / +            (immediate. While playing it
+//                       is queued and lands when the pattern ends; press again
+//                       to move the queue.  SONG pg: the slot's pattern)
+// '   CPY               copy: tag this pattern   "PASTE: Are you sure?"
+// \                     LOAD info                "LOAD: Are you sure?"
 // del                   SAVE info                "SAVE: Are you sure?"
 //                       (press the same key again to do it; anything else
 //                        cancels.  LOAD+SAVE held together = demo)
 // ctl                   next page                jump to PATTERN page
 // opt / alt             octave - / +             (immediate; SONG pg: project - / +)
-// z                     clear cell / song slot   clear whole pattern
+// c   CLR               clear cell / song slot   "CLEAR: Are you sure?"
 //                       (held while REC+playing = erase at playhead)
 // , . ; /               arrows LEFT DOWN UP RIGHT, as printed on the keys
 //                       (immediate, auto-repeat)
 // x   SLD               toggle slide at cursor   WRITE BASS in KEY
-// c   AUX               SAMPLE pg: preview/load  MIC RECORD (lane or deck)
+// b   AUX               SAMPLE pg: preview/load  MIC RECORD (lane or deck)
 //                       SONG pg: set loop start  SONG pg: BOUNCE to SD
 // v   REC               toggle live record       (none)
 // n   SONG              toggle song mode         RESAMPLE the mix (playing)
-// m   ACC               held = accent modifier   (none - pure modifier)
+// z   ACC               held = accent modifier   (none - pure modifier)
 // spc                   play / stop              play from top
 //
 // Tempo is not on the keyboard: it is the BPM row of the SETTINGS page.
@@ -36,9 +40,10 @@
 //   SONG pg: e/u = slot filter target, tab/p = slot repeats
 //
 // PIANO (PATTERN + SETTINGS pages, synth track selected)
-//   white: fn sft a s d f g h j k l           black: q w r t y i o [
+//   white: fn sft a s d f g h j k l           black: q w r t y i o
 // PADS (drum track): lanes 1..8 on fn sft a s d f g h
-// CHOPS (deck selected): slices 1..8 on fn sft a s d f g h, 9..16 on q w r t y i o [
+// CHOPS (deck selected): slices 1..8 on fn sft a s d f g h, 9..15 on q w r t y i o, 16 on j
+// SAMPLE pg (drum samples): fn sft a s d f g h = put the sample on lane 1..8
 // SONG pg: fn sft a s d f g = slot mutes T1 T2 T3 DRUMS A B KICK
 //
 // enter (ok)            held = KEY MAP on the lid: this keyboard, labelled for
@@ -74,6 +79,14 @@ static inline char normalizeKey(char c) {
 #define KC_ENTER  207
 #define KC_SPACE  208
 
+// keys that input.cpp also reads as held modifiers
+#define KEY_ACCENT 'z'
+#define KEY_CLR    'c'
+#define KEY_AUX    'b'
+
+// the 13 mute keys = the 13 grid rows: T1 T2 T3, deck A B, drum lanes 1..8
+#define NUM_MUTE_KEYS (NUM_SYNTHS + NUM_DECKS + NUM_DRUM_LANES)
+
 // ---- actions ----
 enum : uint8_t {
     ACT_NONE = 0,
@@ -81,12 +94,12 @@ enum : uint8_t {
     ACT_LEFT, ACT_RIGHT, ACT_UP, ACT_DOWN,
     ACT_ACCENT, ACT_REC, ACT_KEYS,
     ACT_OCT_DN, ACT_OCT_UP,
+    ACT_PAT_DN, ACT_PAT_UP,
     // continuous while held (input.cpp integrates them over time)
     ACT_CUT_DN, ACT_CUT_UP, ACT_RES_DN, ACT_RES_UP,
     // short/long (fire on release / after 450 ms) - keep ranges contiguous
-    ACT_TRACK1, ACT_TRACK2, ACT_TRACK3, ACT_TRACKD,
-    ACT_PAT1, ACT_PAT2, ACT_PAT3, ACT_PAT4,
-    ACT_PAT5, ACT_PAT6, ACT_PAT7, ACT_PAT8,
+    ACT_MUTE_FIRST, ACT_MUTE_LAST = ACT_MUTE_FIRST + NUM_MUTE_KEYS - 1,
+    ACT_COPY,
     ACT_LOAD, ACT_SAVE,
     ACT_PAGE, ACT_PLAY, ACT_CLR,
     ACT_SONG, ACT_AUX, ACT_SLIDE,
@@ -95,24 +108,28 @@ enum : uint8_t {
 // ---- key -> action (returns ACT_NONE for piano-only / dead keys) ----
 static inline uint8_t keyAction(uint8_t kc) {
     switch (kc) {
-        case '`': return ACT_TRACK1;  case '1': return ACT_TRACK2;
-        case '2': return ACT_TRACK3;  case '3': return ACT_TRACKD;
-        case '4': return ACT_PAT1;    case '5': return ACT_PAT2;
-        case '6': return ACT_PAT3;    case '7': return ACT_PAT4;
-        case '8': return ACT_PAT5;    case '9': return ACT_PAT6;
-        case '0': return ACT_PAT7;    case '-': return ACT_PAT8;
-        case '=':      return ACT_LOAD;
+        // the whole top row, left to right
+        case '`': return ACT_MUTE_FIRST;
+        case '1': case '2': case '3': case '4': case '5':
+        case '6': case '7': case '8': case '9':
+                  return (uint8_t)(ACT_MUTE_FIRST + (kc - '0'));
+        case '0': return ACT_MUTE_FIRST + 10;
+        case '-': return ACT_MUTE_FIRST + 11;
+        case '=': return ACT_MUTE_FIRST + 12;
+        case '[':  return ACT_PAT_DN;  case ']': return ACT_PAT_UP;
+        case '\'': return ACT_COPY;
+        case '\\': return ACT_LOAD;
         case KC_DEL:   return ACT_SAVE;
         case KC_CTRL:  return ACT_PAGE;
         case KC_OPT:   return ACT_OCT_DN;
         case KC_ALT:   return ACT_OCT_UP;
-        case 'z':      return ACT_CLR;
+        case KEY_CLR:  return ACT_CLR;
         // the arrows are where the Cardputer prints them
         case ',': return ACT_LEFT;  case '.': return ACT_DOWN;
         case ';': return ACT_UP;    case '/': return ACT_RIGHT;
-        case 'x': return ACT_SLIDE; case 'c': return ACT_AUX;
+        case 'x': return ACT_SLIDE; case KEY_AUX: return ACT_AUX;
         case 'v': return ACT_REC;
-        case 'n': return ACT_SONG;  case 'm': return ACT_ACCENT;
+        case 'n': return ACT_SONG;  case KEY_ACCENT: return ACT_ACCENT;
         case KC_SPACE: return ACT_PLAY;
         case KC_ENTER: return ACT_KEYS;
         case 'e':    return ACT_CUT_DN;  case 'u': return ACT_CUT_UP;
@@ -127,6 +144,7 @@ static inline bool actImmediate(uint8_t act) {
         case ACT_LEFT: case ACT_RIGHT: case ACT_UP: case ACT_DOWN:
         case ACT_ACCENT: case ACT_REC: case ACT_KEYS:
         case ACT_OCT_DN: case ACT_OCT_UP:
+        case ACT_PAT_DN: case ACT_PAT_UP:
         case ACT_CUT_DN: case ACT_CUT_UP: case ACT_RES_DN: case ACT_RES_UP:
             return true;
         default: return false;
@@ -143,10 +161,9 @@ static inline bool actRepeats(uint8_t act) {
 
 // label shown next to the hold-progress bar
 static inline const char* actLongName(uint8_t act) {
-    if (act >= ACT_TRACK1 && act <= ACT_TRACK3) return "MUTE";
-    if (act == ACT_TRACKD)                      return "MUTE";
-    if (act >= ACT_PAT1 && act <= ACT_PAT8)     return "CLONE";
+    if (act >= ACT_MUTE_FIRST && act <= ACT_MUTE_LAST) return "SELECT";
     switch (act) {
+        case ACT_COPY:   return "PASTE";
         case ACT_LOAD:   return "LOAD";
         case ACT_SAVE:   return "SAVE";
         case ACT_PAGE:   return "PATTERN PG";
@@ -162,7 +179,7 @@ static inline const char* actLongName(uint8_t act) {
 // ---- piano: semitones from C at the current octave, or -1 ----
 // White keys on the home row, sharps on the row above them
 // (shifted one key right so each sharp sits between its whites).
-// The piano stops at l / [ : the ; key is the UP arrow.
+// The piano stops at l / o : ; is the UP arrow, [ is PATTERN -.
 static inline int8_t pianoSemi(uint8_t kc) {
     switch (kc) {
         // white keys
@@ -185,7 +202,6 @@ static inline int8_t pianoSemi(uint8_t kc) {
         case 'y':      return 10;  // A#
         case 'i':      return 13;  // C#'
         case 'o':      return 15;  // D#'
-        case '[':      return 18;  // F#'
     }
     return -1;
 }
@@ -207,7 +223,7 @@ static inline int8_t padSlice(uint8_t kc) {
     if (lane >= 0) return lane;
     switch (kc) {
         case 'q': return 8;   case 'w': return 9;   case 'r': return 10;  case 't': return 11;
-        case 'y': return 12;  case 'i': return 13;  case 'o': return 14;  case '[': return 15;
+        case 'y': return 12;  case 'i': return 13;  case 'o': return 14;  case 'j': return 15;
     }
     return -1;
 }

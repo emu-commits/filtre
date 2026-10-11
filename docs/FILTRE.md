@@ -12,7 +12,7 @@ mix plus stems; vocals go on afterwards in a DAW.
 ## Six steps
 
 1. **PLAY.** FILTRE drums are already loaded (909, 122 BPM, swing 62).
-2. Tap **TD** twice to focus **deck A**. **PG** to SAMPLE, pick a loop, **AUX** loads it.
+2. Hold `3` to focus **deck A**. **PG** to SAMPLE, pick a loop, **AUX** loads it.
 3. The keys play its chops. **REC** + **PLAY** and tap them in: that is your loop.
 4. **e / u** sweep the filter, on any page. With REC on, the sweep is kept in the pattern.
 5. Hold **SLD** to write a bass line in KEY. Play the piano on T1 to change it.
@@ -41,6 +41,12 @@ T2, T3 synths ──────────────────────
   by resampling to exactly 1/2/4/8 bars, or **BPM<LOOP** sets the tempo from it.
 - **Filter** is one shared filter on both decks. The header bar on every page
   shows where the cutoff really is, including recorded motion.
+- **PHASER** is a fourth filter TYPE: 4 or 8 first-order all-pass stages
+  (SLOPE) mixed with the dry bus. CUTOFF places the sweep (120 Hz to 5.4 kHz;
+  keys, recorded locks and song targets all move it), a triangle LFO of one
+  cycle per 4 bars rocks it ±0.9 octave, RESO is the feedback.
+- **Wavetables**: 10 built in. STRINGS and SUPERSAW are read by each voice as
+  3 / 5 detuned copies (`g_wtUnison`), since one cycle cannot hold a detune.
 - **Pump** is a gain envelope retriggered by lane 1, not a compressor. PUMP 0
   is bit-identical to no envelope. With **GHOST** on, lane-1 steps still pump
   while the kick is muted, which is the filtered-intro sound.
@@ -55,29 +61,38 @@ The single source is `keymap.h`. Where FILTRE differs from Microgroove:
 |---|---|---|
 | `e` / `u` | cutoff down / up (hold to sweep) | |
 | `tab` / `p` | resonance down / up | |
-| **TD** (`3`) | drums → deck A → deck B | mute whichever it is on |
+| top row `` ` `` … `=` | mute that grid row: T1 T2 T3, deck A B, drum lanes 1–8 | select that row |
+| `[` / `]` | pattern − / + (queued to the end of the playing pattern; press again to move the queue) | |
+| **CPY** (`'`) | tag this pattern as the copy source | asks "PASTE: You sure?"; `'` again overwrites this pattern with the tagged one |
+| **CLR** (`c`) | clear cell / song slot | asks "CLEAR: Are you sure?"; `c` again clears the pattern |
 | `,` `.` `;` `/` | arrows left, down, up, right, as printed on the keys | |
 | **SLD** (`x`) | slide at cursor | write bass in KEY |
-| **AUX** (`c`) | SAMPLE: preview / load loop | mic record to the lane or deck |
+| **AUX** (`b`) | SAMPLE: preview / load loop | mic record to the lane or deck |
 | **REC** (`v`) | live record on / off | |
 | `opt` / `alt` | octave down / up; SONG page: project slot | (no hold function) |
-| **LOAD** (`=`) / **SAVE** (`del`) | which slot | asks "Are you sure?"; the same key again does it |
+| **LOAD** (`\`) / **SAVE** (`del`) | which slot | asks "Are you sure?"; the same key again does it |
 | **enter** (`ok`) | | while held, the lid shows the key map for the current page and track |
 | **SONG** (`n`) | song mode | resample: a pad (1.9 s), or one bar-exact pattern onto the focused deck |
 
-Tempo has no key: it is the BPM row on SETTINGS. The piano stops at `l` / `[`
-because `;` is the up arrow. `b`, `'`, `]` and `\` are unbound.
+Tempo has no key: it is the BPM row on SETTINGS. The piano stops at `l` / `o`:
+`;` is the up arrow and `[` is pattern −. `m` is unbound.
+
+Mutes are a 13-bit mask in each pattern (`Pattern.mute`), saved per pattern
+(GBX v4; a v3 file loads with its old deck mutes applied to every pattern).
+While playing, the playing pattern's mask is in force and is the one the keys
+edit. Song-slot mutes are added on top.
 
 There is no HELP page. Holding `ok` draws the keyboard on the lid from
 `keymap.h`'s own lookups, so the on-device help cannot go stale.
 
-Deck focused: slices 1–8 on `fn sft a s d f g h`, 9–16 on `q w r t y i o [`.
-Hold **ACC** (`m`) for an accented hit.
+Deck focused: slices 1–8 on `fn sft a s d f g h`, 9–15 on `q w r t y i o`, 16 on `j`.
+Hold **ACC** (`z`) for an accented hit.
 
 SAMPLE page with a deck focused lists `/groovebox/loops`: **AUX** loads into the
-focused deck, **P1** / **P2** load into deck A / B.
+focused deck. With a drum lane focused it lists `/groovebox/samples`: **AUX**
+previews, pads 1–8 put the sample on that lane.
 
-SONG page: **P1–P8** place a pattern, `e`/`u` set the slot's filter target
+SONG page: `[` / `]` set the slot's pattern (an empty slot starts as the slot before it), `e`/`u` set the slot's filter target
 (below zero = none), `tab`/`p` set repeats 1–16, `fn sft a s d f g` toggle the
 slot's mutes for T1 T2 T3 DRUMS A B KICK, hold **AUX** = bounce.
 
@@ -146,8 +161,8 @@ not written. With no song chain, it bounces four passes of the current pattern.
 
 ## Project files
 
-Saves are GBX **v3**. Microgroove v1 and v2 projects load and keep their own
-feel (straight 16ths, no decks); the next save writes v3. Deck audio is
+Saves are GBX **v4** (v3 plus the per-pattern mutes; v3 still loads). Microgroove v1 and v2 projects load and keep their own
+feel (straight 16ths, no decks); the next save writes v4. Deck audio is
 referenced by file name, never embedded.
 
 ```

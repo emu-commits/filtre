@@ -12,7 +12,7 @@
 
 enum DeckMode   : uint8_t { DECK_CHOP = 0, DECK_LOOP, DECK_MODE_COUNT };
 enum SliceMode  : uint8_t { SLICE_AUTO = 0, SLICE_4, SLICE_8, SLICE_16, SLICE_COUNT };
-enum FilterType : uint8_t { FLT_LP = 0, FLT_HP, FLT_BP, FLT_COUNT };
+enum FilterType : uint8_t { FLT_LP = 0, FLT_HP, FLT_BP, FLT_PHASER, FLT_COUNT };
 
 #define OV_W            320     // overview columns (lid width)
 #define DECK_FADE_IN    (1.0f / 24.0f)
@@ -38,7 +38,6 @@ struct Deck {
     uint8_t  fitBars;                    // LOOP: 0 = native speed, else 1/2/4/8 bars
     uint8_t  qual;                       // LoadQual used for the next load
     uint8_t  startTenths;                // load offset into a long file, 0.1 s units
-    bool     mute;
     bool     cut;                        // file was longer than memory
     float    pitch;                      // semitones, -12..+12
     float    level;                      // 0..1
@@ -100,3 +99,5 @@ void  pumpTrigger();
 float pumpRender();                                // advances the envelope; returns duck 0..1
 void  fxReset();                                   // clear filter + pump state
 float cutoffToHz(float c);                         // 0..255 -> Hz
+float phaserHz(float c);                           // 0..255 -> centre of the phaser sweep, Hz
+#define PHASER_STAGES(poles) ((poles) ? 4 : 8)   // the default slope gives the classic 4-stage pedal
