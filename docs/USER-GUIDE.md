@@ -52,7 +52,8 @@ The top row is the pattern grid turned sideways: its 13 keys are the 13 rows
 | `tab` / `p` | resonance down / up | sweeps while held |
 | `x` | slide on the note under the cursor | write a bass line |
 | `b` | (depends on page) | record from the mic |
-| `n` | song mode on / off | resample (while playing) |
+| `n` | song mode on / off. It also picks which mutes the top row edits: the pattern's (off) or the song slot's (on) | resample (while playing) |
+| `m` | SONG page: the arrangements on the card | |
 | `\` | show which project slot | asks **LOAD: Are you sure?** Press `\` again to load |
 | `del` | show which project slot | asks **SAVE: Are you sure?** Press `del` again to save |
 | `\` + `del` together | load the built-in demo | |
@@ -270,14 +271,28 @@ it as **PT1>3**. Press again before then to change your mind: three taps of
 
 **Mutes.** Tap a key of the top row to silence that row: `` ` `` `1` `2` the
 synths, `3` `4` the decks, `5` … `=` the drum lanes (`5` is the kick). Tap
-again to bring it back. Mutes belong to the pattern and are saved with it, so
-pattern 2 can be pattern 1 without the kick: copy, paste, tap `5`. Hold `ok`
-to see which rows are muted (red).
+again to bring it back. Hold `ok` to see which rows are muted (red).
+
+Mutes are a state, not something you record: REC does not matter, and a mute
+covers the whole pattern. There are two sets, and **song mode (`n`) picks the
+one you hear and edit**:
+
+- **Song mode off:** the mutes belong to the pattern and are saved with it, so
+  pattern 2 can be pattern 1 without the kick: copy, paste, tap `5`.
+- **Song mode on:** the mutes belong to the song slot that is playing (stopped:
+  the slot under the cursor on the SONG page), for all its repeats. The
+  pattern's own mutes are ignored.
+
+Neither set is ever copied onto the other: switch back and forth and each is
+as you left it. The one exception is a slot you have just created, which
+starts with its pattern's mutes. The footer says where a mute landed:
+**P3 LANE 1 MUTED** or **S12 LANE 1 MUTED**.
 
 ## 11. Arrange the song
 
 `ctrl` to the **SONG** page. Each slot is one pattern, played a number of
-times, with its own mutes and a filter target.
+times, with its own mutes and a filter target. The 13 small marks in a slot
+are the 13 rows, left to right; a red one is muted.
 
 | Key | Does |
 |---|---|
@@ -286,7 +301,8 @@ times, with its own mutes and a filter target.
 | `]` / `[` | next / previous pattern in this slot. An empty slot starts as a copy of the slot before it |
 | `p` / `tab` | repeats +1 / −1 (1 to 16) |
 | `u` / `e` | filter target up / down. The cutoff glides to this value across the slot. Below zero = no target |
-| `fn` `Aa` `a` `s` `d` `f` `g` | mute T1, T2, T3, drums, deck A, deck B, kick only |
+| top row `` ` `` … `=` | with song mode on (`n`): mute that row in this slot. Same 13 keys as everywhere else |
+| `m` | list the arrangements on the card (see below) |
 | `c` | empty this slot |
 | `b` | make this slot the loop-back point |
 
@@ -299,10 +315,30 @@ A classic shape, using one pattern and its copies:
 
 | Slot | Pattern | Repeats | Mutes | Filter target |
 |---|---|---|---|---|
-| 1 | P1 | 8 | kick (`g`), bass (`fn`) | low (about 50) |
+| 1 | P1 | 8 | kick (`5`), bass (`` ` ``) | low (about 50) |
 | 2 | P1 | 8 | bass | rising (about 140) |
-| 3 | P2 | 16 | none | open (254) |
+| 3 | P1 | 16 | none | open (254) |
 | 4 | P1 | 8 | kick | low again |
+
+One pattern is enough for that: the slots carry the mutes.
+
+### Start from a reference track
+
+The **arranger** is a web page that maps a record bar by bar in FILTRE's own
+terms: <https://emu-commits.github.io/filtre/arranger/>
+
+1. Open the track there (MP3 or WAV; it stays on your computer). It finds the
+   tempo and the bar lines and shows every measure.
+2. Give each measure a pattern number and mute the parts that are silent in
+   it. Say per pattern whether it is 1 or 2 bars long.
+3. **Save .arr** and copy the file to `/groovebox/songs/` on the card.
+4. On FILTRE: SONG page, tap `m`. Pick the file with `;` and `.`, hold `\`,
+   and answer **LOAD …: You sure?** with `\` again.
+
+That replaces the song chain, sets the length of the patterns the file names
+and the tempo, and turns song mode on. It does not touch your notes, sounds,
+decks or the patterns' own mutes, and nothing is written to the card until you
+save the project. From there the song is yours to change like any other.
 
 ## 12. Save and load
 

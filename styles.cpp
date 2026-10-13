@@ -186,10 +186,10 @@ bool loadDemoPattern() {
     for (int st = 0; st < STEPS_PER_BAR; st++) g_patterns[2].drums[st] |= (1 << L_CHAT);
 
     for (int i = 0; i < SONG_LENGTH; i++) songClearSlot(i);
-    g_song[0] = { 0, 2, SLOT_MUTE_KICK, 50 };    // filter nearly shut, no kick (it still pumps)
+    g_song[0] = { 0, 2, MUTE_LANE(0), 50 };      // filter nearly shut, no kick (it still pumps)
     g_song[1] = { 1, 2, 0, 140 };                // kick + bass, opening
     g_song[2] = { 2, 2, 0, 254 };                // wide open
-    g_song[3] = { 3, 1, SLOT_MUTE_T1, 51 };      // back down, loop to slot 2
+    g_song[3] = { 3, 1, MUTE_SYNTH(0), 51 };      // back down, loop to slot 2
     g_songLoopStart = 1;
     g_fx.cutoff = 36;
     g_curPattern = g_nextPattern = 0;

@@ -42,6 +42,8 @@ uint8_t uiRowDeckRow(uint8_t row);        // the DeckRow behind a row; DR_COUNT 
 void uiRowText(uint8_t row, char* name, size_t nn, char* val, size_t vn);
 void uiTrackTitle(char* out, size_t n);   // "DECK A" / "DRUM LANE 3" / "SYNTH 2"
 bool uiBrowsingLoops();                   // SAMPLE page lists /loops (a deck is focused)
+extern bool g_arrList;                    // SONG page shows /groovebox/songs instead of the slots
+void uiScanSongDir();                     // fill the file list with the arrangements on the card
 
 void uiInit();
 void uiDraw();

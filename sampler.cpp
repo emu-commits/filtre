@@ -75,7 +75,7 @@ bool samplerInit() {
 
 void samplerEnsureDirs() {
     static const char* dirs[] = { DIR_ROOT, DIR_SAMPLES, DIR_WAVETABLES,
-                                  DIR_PROJECTS, DIR_LOOPS, DIR_BOUNCE };
+                                  DIR_PROJECTS, DIR_LOOPS, DIR_BOUNCE, DIR_SONGS };
     for (auto d : dirs) if (!SD.exists(d)) SD.mkdir(d);
 }
 

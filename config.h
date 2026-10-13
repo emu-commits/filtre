@@ -24,7 +24,7 @@
 #define NUM_DRUM_LANES   8
 #define NUM_STEPS        32    // max steps per pattern (2 bars)
 #define STEPS_PER_BAR    16
-#define NUM_PATTERNS     8
+#define NUM_PATTERNS     32
 #define SONG_LENGTH      64
 #define SONG_EMPTY       0xFF
 
@@ -45,6 +45,7 @@
 #define DIR_LOOPS        "/groovebox/loops"
 #define DIR_LOOPS_LEN    16
 #define DIR_BOUNCE       "/groovebox/bounce"
+#define DIR_SONGS        "/groovebox/songs"
 
 // ---------- Sample memory ----------
 // One shared arena for everything that plays from RAM (deck A, deck B,

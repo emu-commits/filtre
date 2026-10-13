@@ -8,13 +8,16 @@
 // ` 1 2                 mute T1 / T2 / T3        select that track
 // 3 4                   mute deck A / B          select that deck
 // 5 6 7 8 9 0 - =       mute drum lane 1..8      select that lane
-//                       (the 13 keys are the 13 grid rows; mutes belong
-//                        to the pattern and are saved with it)
+//                       (the 13 keys are the 13 grid rows. Song mode off:
+//                        the pattern's mutes. Song mode on: the song slot's,
+//                        and the pattern's are ignored. Both are saved.)
 // [ ]                   pattern - / +            (immediate. While playing it
 //                       is queued and lands when the pattern ends; press again
 //                       to move the queue.  SONG pg: the slot's pattern)
 // '   CPY               copy: tag this pattern   "PASTE: Are you sure?"
 // \                     LOAD info                "LOAD: Are you sure?"
+//                       (SONG pg with the arrangement list up: that file)
+// m   ARR               SONG pg: arrangement list on / off (/groovebox/songs)
 // del                   SAVE info                "SAVE: Are you sure?"
 //                       (press the same key again to do it; anything else
 //                        cancels.  LOAD+SAVE held together = demo)
@@ -44,7 +47,6 @@
 // PADS (drum track): lanes 1..8 on fn sft a s d f g h
 // CHOPS (deck selected): slices 1..8 on fn sft a s d f g h, 9..15 on q w r t y i o, 16 on j
 // SAMPLE pg (drum samples): fn sft a s d f g h = put the sample on lane 1..8
-// SONG pg: fn sft a s d f g = slot mutes T1 T2 T3 DRUMS A B KICK
 //
 // enter (ok)            held = KEY MAP on the lid: this keyboard, labelled for
 //                       the page and track you are on. Every other key still works.
@@ -92,7 +94,7 @@ enum : uint8_t {
     ACT_NONE = 0,
     // immediate (fire on key-down)
     ACT_LEFT, ACT_RIGHT, ACT_UP, ACT_DOWN,
-    ACT_ACCENT, ACT_REC, ACT_KEYS,
+    ACT_ACCENT, ACT_REC, ACT_KEYS, ACT_ARR,
     ACT_OCT_DN, ACT_OCT_UP,
     ACT_PAT_DN, ACT_PAT_UP,
     // continuous while held (input.cpp integrates them over time)
@@ -129,6 +131,7 @@ static inline uint8_t keyAction(uint8_t kc) {
         case ';': return ACT_UP;    case '/': return ACT_RIGHT;
         case 'x': return ACT_SLIDE; case KEY_AUX: return ACT_AUX;
         case 'v': return ACT_REC;
+        case 'm': return ACT_ARR;
         case 'n': return ACT_SONG;  case KEY_ACCENT: return ACT_ACCENT;
         case KC_SPACE: return ACT_PLAY;
         case KC_ENTER: return ACT_KEYS;
@@ -142,7 +145,7 @@ static inline uint8_t keyAction(uint8_t kc) {
 static inline bool actImmediate(uint8_t act) {
     switch (act) {
         case ACT_LEFT: case ACT_RIGHT: case ACT_UP: case ACT_DOWN:
-        case ACT_ACCENT: case ACT_REC: case ACT_KEYS:
+        case ACT_ACCENT: case ACT_REC: case ACT_KEYS: case ACT_ARR:
         case ACT_OCT_DN: case ACT_OCT_UP:
         case ACT_PAT_DN: case ACT_PAT_UP:
         case ACT_CUT_DN: case ACT_CUT_UP: case ACT_RES_DN: case ACT_RES_UP:
@@ -226,10 +229,4 @@ static inline int8_t padSlice(uint8_t kc) {
         case 'y': return 12;  case 'i': return 13;  case 'o': return 14;  case 'j': return 15;
     }
     return -1;
-}
-
-// ---- SONG page: slot mute toggles on the first seven pads (bit index) ----
-static inline int8_t padSlotMute(uint8_t kc) {
-    int8_t lane = padLane(kc);
-    return (lane >= 0 && lane < 7) ? lane : -1;
 }

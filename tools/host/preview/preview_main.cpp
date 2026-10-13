@@ -85,9 +85,11 @@ int main() {
     g_curTrack = TRK_DRUMS; uiScanSampleDir(); g_fileSel = 9; samplerLoad(g_fileList[2]); shot("11_sample_drums");
 
     g_curPage = PAGE_SONG; g_songMode = true; g_songCursor = 2;
-    g_song[4] = { 7, 16, 0x7F, 0 }; g_song[5] = { 3, 8, SLOT_MUTE_T1 | SLOT_MUTE_DECKB, 254 };
-    for (int i = 6; i < 40; i++) g_song[i] = { (uint8_t)(i % 8), (uint8_t)(1 + i % 5), (uint8_t)(i % 3 ? 0 : SLOT_MUTE_KICK), (uint8_t)(i % 4 ? i * 6 : TARGET_NONE) };
+    g_song[4] = { 7, 16, MUTE_MASK, 0 }; g_song[5] = { 3, 8, MUTE_SYNTH(0) | MUTE_DECK(1) | MUTE_LANE(5), 254 };
+    for (int i = 6; i < 40; i++) g_song[i] = { (uint8_t)(i % 8), (uint8_t)(1 + i % 5), (uint16_t)(i % 3 ? 0 : MUTE_LANE(0)), (uint8_t)(i % 4 ? i * 6 : TARGET_NONE) };
     shot("12_song"); g_songCursor = 4; shot("13_song_slot_full");
+    { File f = SD.open("/groovebox/songs/Around-A-Very-Long-Reference-Track-Name.arr", FILE_WRITE); f.write((const uint8_t*)"x", 1); f.close(); }
+    g_arrList = true; uiScanSongDir(); g_fileSel = 0; shot("13b_song_arrangements"); g_arrList = false;
 
     // a question on both screens, at its longest
     g_curPage = PAGE_PATTERN; g_curTrack = TRK_DECK_A;

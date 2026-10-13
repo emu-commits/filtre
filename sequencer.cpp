@@ -9,6 +9,7 @@
 Pattern    g_patterns[NUM_PATTERNS];
 SongSlot   g_song[SONG_LENGTH];
 uint8_t    g_songLoopStart = 0;
+uint8_t    g_songCursor = 0;       // the slot the SONG page edits; stopped, the one whose mutes apply
 
 SynthTrack g_synths[NUM_SYNTHS];
 DrumLane   g_drumLanes[NUM_DRUM_LANES];
@@ -19,7 +20,7 @@ volatile uint8_t g_lastStep    = 0;
 volatile uint8_t g_playPattern = 0;
 volatile uint8_t g_songPos     = 0;
 volatile uint8_t g_slotRep     = 0;
-volatile uint8_t g_slotMute    = 0;
+volatile uint16_t g_slotMute   = 0;
 volatile bool    g_songEnded   = false;
 bool       g_recEnabled  = false;
 bool       g_songMode    = false;
@@ -88,7 +89,7 @@ void clearPattern(uint8_t idx) {
 
 void songClearSlot(uint8_t i) {
     if (i >= SONG_LENGTH) return;
-    g_song[i] = { SONG_EMPTY, 1, 0, TARGET_NONE };
+    g_song[i] = { SONG_EMPTY, 1, 0, TARGET_NONE, 0 };
 }
 
 void sequencerInit() {
@@ -121,18 +122,37 @@ void sequencerInit() {
 }
 
 // ---------- mutes ----------
-// The pattern that is sounding carries the mutes; stopped, the one on screen.
+// Song mode off: the pattern that is sounding carries the mutes (stopped, the
+// one on screen). Song mode on: the slot does, and the pattern's are ignored.
+// Nothing is ever copied between the two, so each comes back as it was left.
+static int muteSlot() {
+    uint8_t i = g_playing ? (uint8_t)g_songPos : g_songCursor;
+    return (i < SONG_LENGTH && g_song[i].pattern != SONG_EMPTY) ? i : -1;
+}
+
 uint16_t seqMuteMask() {
-    uint16_t m = g_patterns[g_playing ? g_playPattern : g_curPattern].mute;
     if (g_songMode) {
-        uint8_t sm = g_slotMute;
-        m |= sm & (SLOT_MUTE_T1 | SLOT_MUTE_T2 | SLOT_MUTE_T3);
-        if (sm & SLOT_MUTE_DRUMS) m |= MUTE_ALL_LANES;
-        if (sm & SLOT_MUTE_DECKA) m |= MUTE_DECK(0);
-        if (sm & SLOT_MUTE_DECKB) m |= MUTE_DECK(1);
-        if (sm & SLOT_MUTE_KICK)  m |= MUTE_LANE(0);
+        if (g_playing) return g_slotMute;
+        int i = muteSlot();
+        return i >= 0 ? g_song[i].mute : 0;
     }
-    return m;
+    return g_patterns[g_playing ? g_playPattern : g_curPattern].mute;
+}
+
+int seqToggleMute(uint8_t row, uint8_t* pat, bool* nowMuted) {
+    uint16_t bit = (uint16_t)(1u << row);
+    if (g_songMode) {
+        int i = muteSlot();
+        if (i < 0) return -1;
+        g_song[i].mute ^= bit;
+        if (g_playing) g_slotMute = g_song[i].mute;
+        *nowMuted = g_song[i].mute & bit;
+        return i + 1;
+    }
+    *pat = g_playing ? (uint8_t)g_playPattern : g_curPattern;
+    g_patterns[*pat].mute ^= bit;
+    *nowMuted = g_patterns[*pat].mute & bit;
+    return 0;
 }
 bool seqDeckMuted(uint8_t d)  { return seqMuteMask() & MUTE_DECK(d); }
 

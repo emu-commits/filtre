@@ -23,13 +23,13 @@
 Page    g_curPage    = PAGE_PATTERN;
 bool    g_needRedraw = true;
 uint8_t g_soundParam = 0;
-uint8_t g_songCursor = 0;
 float   g_holdProg   = 0.0f;
 char    g_holdLabel[16] = "";
 
 char    g_fileList[BROWSER_MAX][LOOP_NAME_LEN];
 uint8_t g_fileCount = 0;
 uint8_t g_fileSel   = 0;
+bool    g_arrList   = false;
 
 static M5Canvas canvas(&M5Cardputer.Display);
 static char     s_status[28] = "";
@@ -80,10 +80,17 @@ void uiTick() {
 
 bool uiBrowsingLoops() { return s_listIsLoops; }
 
+static void scanDir(const char* path, const char* ext, const char* EXT);
 void uiScanSampleDir() {
-    g_fileCount = 0;
     s_listIsLoops = trackIsDeck(g_curTrack);
-    File dir = SD.open(s_listIsLoops ? DIR_LOOPS : DIR_SAMPLES);
+    scanDir(s_listIsLoops ? DIR_LOOPS : DIR_SAMPLES, ".wav", ".WAV");
+}
+// the SAMPLE page rescans when it is entered, so the list can be borrowed
+void uiScanSongDir() { scanDir(DIR_SONGS, ".arr", ".ARR"); }
+
+static void scanDir(const char* path, const char* ext, const char* EXT) {
+    g_fileCount = 0;
+    File dir = SD.open(path);
     if (!dir || !dir.isDirectory()) return;
     File f = dir.openNextFile();
     while (f && g_fileCount < BROWSER_MAX) {
@@ -91,7 +98,7 @@ void uiScanSampleDir() {
         int slash = nm.lastIndexOf('/');            // some core versions return full path
         if (slash >= 0) nm = nm.substring(slash + 1);
         // a name that does not fit could not be opened again, so it is not listed
-        if (!f.isDirectory() && !nm.startsWith(".") && (nm.endsWith(".wav") || nm.endsWith(".WAV")) &&
+        if (!f.isDirectory() && !nm.startsWith(".") && (nm.endsWith(ext) || nm.endsWith(EXT)) &&
             strlen(nm.c_str()) < LOOP_NAME_LEN) {
             strncpy(g_fileList[g_fileCount], nm.c_str(), LOOP_NAME_LEN - 1);
             g_fileList[g_fileCount][LOOP_NAME_LEN - 1] = 0;
@@ -316,7 +323,7 @@ static void drawPatternPage() {
     uint8_t len  = patLen(p);
     uint8_t base = (uint8_t)((g_curStep / STEPS_PER_BAR) * STEPS_PER_BAR);   // bar on screen
     bool here = g_playing && g_playPattern == g_curPattern;
-    const uint16_t mu = p.mute;
+    const uint16_t mu = seqMuteMask();
     int y = 13;
 
     // 3 synth rows (11 px pitch)
@@ -680,6 +687,24 @@ static void drawSongPage() {
     canvas.printf("PROJECT P%u %s", g_curProject + 1,
                   storageProjectExists(g_curProject) ? "*" : "");
 
+    if (g_arrList) {                              // arrangements on the card
+        canvas.setCursor(2, 28); canvas.setTextColor(COL_AMBER); canvas.print("LOAD ARRANGEMENT");
+        if (!g_fileCount) {
+            canvas.setTextColor(COL_DIM);
+            canvas.setCursor(2, 44); canvas.print("no .arr files in");
+            canvas.setCursor(2, 56); canvas.print(DIR_SONGS);
+        }
+        int first = (g_fileSel > 3) ? g_fileSel - 3 : 0;
+        for (int i = 0; i < 7 && first + i < g_fileCount; i++) {
+            bool on = (first + i == g_fileSel);
+            canvas.setTextColor(on ? COL_TEXT : COL_DIM);
+            canvas.setCursor(2, 40 + i * 10);
+            canvas.print(on ? ">" : " ");
+            printClipped(g_fileList[first + i], 38);
+        }
+        return;
+    }
+
     const int gx = 8, gy = 25, cw = 14, ch = 21;
     for (int i = 0; i < SONG_LENGTH; i++) {
         int x = gx + (i % 16) * cw;
@@ -723,10 +748,11 @@ static void drawSongPage() {
         canvas.printf("%u:P%u x%u ", g_songCursor + 1, sl.pattern + 1, sl.repeats);
         canvas.setTextColor(COL_AMBER);
         if (sl.target == TARGET_NONE) canvas.print("cut -- "); else canvas.printf("cut %d%% ", sl.target * 100 / 254);
-        static const char* mn[SLOT_MUTE_BITS] = {"1","2","3","D","A","B","K"};
+        // muted rows in grid order: synths 1-3, decks A B, drum lanes 1-8
         canvas.setTextColor(COL_REC);
         if (sl.mute) canvas.print("mute ");
-        for (int b = 0; b < SLOT_MUTE_BITS; b++) if (sl.mute & (1 << b)) canvas.print(mn[b]);
+        for (int b = 0; b < NUM_SYNTHS + NUM_DECKS + NUM_DRUM_LANES; b++)
+            if (sl.mute & (1u << b)) canvas.print("123AB12345678"[b]);
     }
 }
 
@@ -745,7 +771,8 @@ void uiDraw() {
             drawFooter(s_listIsLoops ? "b:load here   hold 3/4: deck A/B"
                                      : "b:preview   fn Aa a s d f g h: lane"); break;
         default:           drawSongPage();
-            drawFooter("[ ]:pattern e/u:cut tab/p:x c:clr"); break;
+            drawFooter(g_arrList ? "; . pick   hold \\:load   m:back"
+                                 : "[ ]:pattern e/u:cut tab/p:x m:arr"); break;
     }
     canvas.pushSprite(0, 0);
 }

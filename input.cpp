@@ -50,7 +50,7 @@ static uint16_t s_rptCount = 0;
 
 // a question on screen ("LOAD: Are you sure?"): the same key again says yes,
 // any other key or a few seconds says no
-enum : uint8_t { CONF_NONE = 0, CONF_LOAD, CONF_SAVE, CONF_STYLE, CONF_CLEAR, CONF_PASTE };
+enum : uint8_t { CONF_NONE = 0, CONF_LOAD, CONF_SAVE, CONF_STYLE, CONF_CLEAR, CONF_PASTE, CONF_ARR };
 #define CONFIRM_MS 4000
 static uint8_t  s_confKind = CONF_NONE, s_confAct = ACT_NONE, s_confArg = 0;
 static uint32_t s_confUntil = 0;
@@ -266,6 +266,11 @@ static void arrow(uint8_t act, const KeySnap& now) {
             break;
 
         case PAGE_SONG:
+            if (g_arrList) {                              // the list of arrangements
+                if (dy < 0 && g_fileSel > 0) g_fileSel--;
+                if (dy > 0 && g_fileSel + 1 < g_fileCount) g_fileSel++;
+                break;
+            }
             if (dy) g_songCursor = (uint8_t)((g_songCursor + SONG_LENGTH + dy * 16) % SONG_LENGTH);
             if (dx) g_songCursor = (uint8_t)((g_songCursor + SONG_LENGTH + dx) % SONG_LENGTH);
             break;
@@ -279,6 +284,7 @@ static void arrow(uint8_t act, const KeySnap& now) {
 // PATTERN/SETTINGS/SAMPLE: the live filter. SONG: the slot under the cursor.
 static void filterKeyDown(uint8_t act) {
     if (g_curPage == PAGE_SONG) {
+        if (g_arrList) return;
         SongSlot& sl = g_song[g_songCursor];
         if (sl.pattern == SONG_EMPTY) { uiStatus("PLACE A PATTERN FIRST"); return; }
         if (act == ACT_CUT_DN || act == ACT_CUT_UP) {
@@ -358,12 +364,14 @@ static void doImmediate(uint8_t act, const KeySnap& now) {
             int dir = (act == ACT_PAT_UP) ? 1 : -1;
             char m[24];
             if (g_curPage == PAGE_SONG) {                 // the pattern in the slot under the cursor
+                if (g_arrList) break;
                 SongSlot& sl = g_song[g_songCursor];
                 if (sl.pattern == SONG_EMPTY) {           // a new slot starts as the one before it
                     uint8_t from = (g_songCursor && g_song[g_songCursor - 1].pattern != SONG_EMPTY)
                                    ? g_song[g_songCursor - 1].pattern : g_curPattern;
                     songClearSlot(g_songCursor);
                     sl.pattern = from;
+                    sl.mute = g_patterns[from].mute;      // the one time mutes are copied: a new slot
                 } else {
                     sl.pattern = (uint8_t)((sl.pattern + dir + NUM_PATTERNS) % NUM_PATTERNS);
                 }
@@ -377,6 +385,15 @@ static void doImmediate(uint8_t act, const KeySnap& now) {
             else                           snprintf(m, sizeof(m), "NEXT: P%u", to + 1);
             uiStatus(m); g_needRedraw = true; break;
         }
+
+        case ACT_ARR:                                     // SONG page: the arrangements on the card
+            if (g_curPage != PAGE_SONG) { uiStatus("ARRANGEMENTS: SONG PAGE"); break; }
+            g_arrList = !g_arrList;
+            if (g_arrList) {
+                if (!g_sdOk) { g_arrList = false; uiStatus("NO SD CARD"); break; }
+                uiScanSongDir(); g_fileSel = 0;
+            }
+            g_needRedraw = true; break;
 
         case ACT_ACCENT: break;   // pure modifier
         case ACT_KEYS:
@@ -414,23 +431,25 @@ static void muteRowName(uint8_t i, char* o, size_t n) {
 
 // ---------- short actions (release < 450ms) ----------
 static void doShort(uint8_t act) {
-    // the top row: mute that grid row. Mutes live in the pattern, and the one
-    // you hear is the one that changes (in song mode that may not be on screen)
+    // the top row: mute that grid row. Song mode decides where it lands: off =
+    // the pattern you hear, on = the song slot you hear (stopped: the pattern
+    // on screen / the slot under the SONG cursor). The message says which.
     if (act >= ACT_MUTE_FIRST && act <= ACT_MUTE_LAST) {
-        uint8_t i = (uint8_t)(act - ACT_MUTE_FIRST);
-        uint8_t pat = g_playing ? (uint8_t)g_playPattern : g_curPattern;
-        uint16_t& mu = g_patterns[pat].mute;
-        mu ^= (uint16_t)(1u << i);
+        uint8_t i = (uint8_t)(act - ACT_MUTE_FIRST), pat = 0;
+        bool muted = false;
+        int slot = seqToggleMute(i, &pat, &muted);
         char nm[10], m[24];
         muteRowName(i, nm, sizeof(nm));
-        if (pat != g_curPattern) snprintf(m, sizeof(m), "P%u %s %s", pat + 1, nm, (mu & (1u << i)) ? "MUTED" : "ON");
-        else                     snprintf(m, sizeof(m), "%s %s", nm, (mu & (1u << i)) ? "MUTED" : "ON");
+        if (slot < 0)      snprintf(m, sizeof(m), "SONG: EMPTY SLOT");
+        else if (slot > 0) snprintf(m, sizeof(m), "S%d %s %s", slot, nm, muted ? "MUTED" : "ON");
+        else               snprintf(m, sizeof(m), "P%u %s %s", pat + 1, nm, muted ? "MUTED" : "ON");
         uiStatus(m); g_needRedraw = true; return;
     }
 
     switch (act) {
         case ACT_LOAD: {
             char m[24];
+            if (g_curPage == PAGE_SONG && g_arrList) { uiStatus(g_fileCount ? "hold = LOAD THIS ONE" : "NO ARRANGEMENTS"); break; }
             snprintf(m, sizeof(m), "P%u%s hold=LOAD", g_curProject + 1,
                      storageProjectExists(g_curProject) ? "*" : " empty");
             uiStatus(m); break;
@@ -447,6 +466,7 @@ static void doShort(uint8_t act) {
             uiStatus(m); break;
         }
         case ACT_PAGE:
+            g_arrList = false;
             g_curPage = (Page)(((int)g_curPage + 1) % PAGE_COUNT);
             if (g_curPage == PAGE_SAMPLE) uiScanSampleDir();
             if (g_curPage == PAGE_SETTINGS) g_soundParam = 0;
@@ -457,14 +477,14 @@ static void doShort(uint8_t act) {
             g_needRedraw = true; break;
 
         case ACT_CLR:
-            if (g_curPage == PAGE_SONG) songClearSlot(g_songCursor);
+            if (g_curPage == PAGE_SONG) { if (!g_arrList) songClearSlot(g_songCursor); }
             else clearCellAtCursor();
             g_needRedraw = true; break;
 
         case ACT_SONG:
             g_songMode = !g_songMode;
             g_nextPattern = g_curPattern;         // nothing stays queued across the switch
-            uiStatus(g_songMode ? "SONG MODE" : "PATTERN MODE");
+            uiStatus(g_songMode ? "SONG MODE: SLOT MUTES" : "PATTERN MODE: ITS MUTES");
             g_needRedraw = true; break;
 
         case ACT_SLIDE:
@@ -488,7 +508,7 @@ static void doShort(uint8_t act) {
                 if (slot >= 0) auditionSample(slot);
                 else uiStatus("LOAD FAILED");
                 g_needRedraw = true;
-            } else if (g_curPage == PAGE_SONG) {
+            } else if (g_curPage == PAGE_SONG && !g_arrList) {
                 g_songLoopStart = g_songCursor;
                 uiStatus("LOOP SET"); g_needRedraw = true;
             } else {
@@ -520,6 +540,12 @@ static void doLong(uint8_t act) {
     switch (act) {
         case ACT_LOAD: case ACT_SAVE: {       // the hold only asks; the same key again does it
             char m[28];
+            if (act == ACT_LOAD && g_curPage == PAGE_SONG && g_arrList) {     // the arrangement under the cursor
+                if (!g_fileCount) { uiStatus("NO ARRANGEMENTS"); break; }
+                snprintf(m, sizeof(m), "LOAD %.9s: You sure?", g_fileList[g_fileSel]);
+                confirmAsk(CONF_ARR, act, 0, m);
+                break;
+            }
             if (act == ACT_LOAD && !storageProjectExists(g_curProject)) {
                 snprintf(m, sizeof(m), "P%u IS EMPTY", g_curProject + 1);
                 uiStatus(m); break;
@@ -529,6 +555,7 @@ static void doLong(uint8_t act) {
             break;
         }
         case ACT_PAGE:
+            g_arrList = false;
             g_curPage = PAGE_PATTERN; g_needRedraw = true; break;
         case ACT_PLAY:
             sequencerStart(true); g_needRedraw = true; break;
@@ -593,6 +620,19 @@ static void confirmRun(uint8_t kind, uint8_t arg) {
             uiStatus("SAVING..."); uiDrawNow();
             uiStatus(storageSaveProject(g_curProject) ? "SAVED" : "SAVE FAILED");
             break;
+        case CONF_ARR: {                      // the song chain, pattern lengths and tempo; notes stay
+            if (!g_arrList || g_fileSel >= g_fileCount) break;
+            if (g_playing) sequencerStop();
+            int n = storageLoadArrangement(g_fileList[g_fileSel]);
+            char m[24];
+            if (n > 0) {
+                g_arrList = false; g_songCursor = 0; g_songMode = true;
+                g_nextPattern = g_curPattern;
+                snprintf(m, sizeof(m), "%d SLOTS, SONG MODE ON", n);
+            } else snprintf(m, sizeof(m), "NOT AN ARRANGEMENT");
+            uiStatus(m);
+            break;
+        }
         case CONF_STYLE:
             styleApply(arg, g_curPattern);
             uiStatus(g_styleNames[arg]);
@@ -616,12 +656,6 @@ static void confirmRun(uint8_t kind, uint8_t arg) {
 static void doPiano(uint8_t kc, const KeySnap& now) {
     bool accent = accentHeld(now);
 
-    if (g_curPage == PAGE_SONG) {                         // slot mutes
-        int8_t bit = padSlotMute(kc);
-        SongSlot& sl = g_song[g_songCursor];
-        if (bit >= 0 && sl.pattern != SONG_EMPTY) { sl.mute ^= (uint8_t)(1 << bit); g_needRedraw = true; }
-        return;
-    }
     if (g_curPage == PAGE_SAMPLE) {                       // pad = put this sample on that lane
         int8_t lane = padLane(kc);
         if (lane < 0 || uiBrowsingLoops() || !g_fileCount) return;
@@ -796,7 +830,7 @@ void inputUpdate() {
 
         // piano/pads take priority over any action bound to the same key
         if ((pianoSemi(kc) >= 0 &&
-             (g_curPage == PAGE_PATTERN || g_curPage == PAGE_SETTINGS || g_curPage == PAGE_SONG)) ||
+             (g_curPage == PAGE_PATTERN || g_curPage == PAGE_SETTINGS)) ||
             (g_curPage == PAGE_SAMPLE && padLane(kc) >= 0 && !uiBrowsingLoops())) {
             doPiano(kc, now);
             continue;

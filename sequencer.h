@@ -95,7 +95,8 @@ struct Pattern {
     uint8_t   length;                       // 16 or 32 (0 reads as 16)
     uint16_t  mute;                         // MUTE_*: one bit per grid row
 };
-// Mutes belong to the pattern: T1 T2 T3, deck A B, drum lanes 1..8
+// One bit per grid row: T1 T2 T3, deck A B, drum lanes 1..8. A pattern has a
+// set and so has every song slot; song mode decides which one is in force.
 #define MUTE_SYNTH(s)  (1u << (s))
 #define MUTE_DECK(d)   (1u << (NUM_SYNTHS + (d)))
 #define MUTE_LANE(l)   (1u << (NUM_SYNTHS + NUM_DECKS + (l)))
@@ -104,28 +105,22 @@ struct Pattern {
 static inline uint8_t patLen(const Pattern& p) { return p.length == NUM_STEPS ? NUM_STEPS : STEPS_PER_BAR; }
 
 // song slot: a pattern, how many times it plays, who is silent, where the filter ends up
-#define SLOT_MUTE_T1    0x01
-#define SLOT_MUTE_T2    0x02
-#define SLOT_MUTE_T3    0x04
-#define SLOT_MUTE_DRUMS 0x08
-#define SLOT_MUTE_DECKA 0x10
-#define SLOT_MUTE_DECKB 0x20
-#define SLOT_MUTE_KICK  0x40
-#define SLOT_MUTE_BITS  7
 #define TARGET_NONE     255   // so targets run 0..254
 #define MAX_REPEATS     16
 
 struct SongSlot {
     uint8_t pattern;      // SONG_EMPTY = empty
     uint8_t repeats;      // 1..MAX_REPEATS
-    uint8_t mute;         // SLOT_MUTE_*
+    uint16_t mute;        // MUTE_*: in song mode these replace the pattern's
     uint8_t target;       // cutoff reached at the end of the slot, TARGET_NONE = leave it
+    uint8_t spare;        // keeps the struct free of padding (it is hashed and compared whole)
 };
 
 // ---------- Shared state (defined in sequencer.cpp) ----------
 extern Pattern    g_patterns[NUM_PATTERNS];
 extern SongSlot   g_song[SONG_LENGTH];
 extern uint8_t    g_songLoopStart;
+extern uint8_t    g_songCursor;
 
 extern SynthTrack g_synths[NUM_SYNTHS];
 extern DrumLane   g_drumLanes[NUM_DRUM_LANES];
@@ -137,7 +132,7 @@ extern volatile uint8_t g_lastStep;       // step sounding now
 extern volatile uint8_t g_playPattern;    // pattern currently sounding
 extern volatile uint8_t g_songPos;
 extern volatile uint8_t g_slotRep;        // repeat counter inside the song slot
-extern volatile uint8_t g_slotMute;       // mute mask of the playing slot (song mode)
+extern volatile uint16_t g_slotMute;      // mute mask of the playing slot (song mode)
 extern volatile bool    g_songEnded;      // one-shot song reached its end (bounce)
 extern bool       g_recEnabled;
 extern bool       g_songMode;
@@ -174,7 +169,10 @@ static inline void seqTick() {      // once per sample
     if (g_playing) { if (g_seqNow == g_seqNextAt) seqFireStep(); g_seqNow++; }
 }
 float seqCutoffTick();              // once per sample: effective cutoff 0..255
-uint16_t seqMuteMask();             // MUTE_* in force now: the pattern's, plus the song slot's
+uint16_t seqMuteMask();             // MUTE_* in force now: the song slot's in song mode, else the pattern's
+// Flip one row where seqMuteMask() reads it. Returns the slot + 1 it changed,
+// 0 for a pattern (*pat says which), -1 when song mode has no slot to change.
+int   seqToggleMute(uint8_t row, uint8_t* pat, bool* nowMuted);
 bool  seqDeckMuted(uint8_t d);
 void  engineStopSampleVoices();     // arena is about to move
 

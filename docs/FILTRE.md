@@ -77,10 +77,13 @@ The single source is `keymap.h`. Where FILTRE differs from Microgroove:
 Tempo has no key: it is the BPM row on SETTINGS. The piano stops at `l` / `o`:
 `;` is the up arrow and `[` is pattern −. `m` is unbound.
 
-Mutes are a 13-bit mask in each pattern (`Pattern.mute`), saved per pattern
-(GBX v4; a v3 file loads with its old deck mutes applied to every pattern).
-While playing, the playing pattern's mask is in force and is the one the keys
-edit. Song-slot mutes are added on top.
+Mutes are a 13-bit mask, one bit per grid row, and there are two sets: one in
+each pattern (`Pattern.mute`) and one in each song slot (`SongSlot.mute`).
+Song mode picks the set that is in force and that the top row edits
+(`seqMuteMask` / `seqToggleMute`): off = the playing pattern's, on = the
+playing slot's (stopped: the pattern on screen / the slot under the SONG
+cursor). The slot's mask replaces the pattern's, it is not added to it, and
+neither is copied to the other except when a slot is first created.
 
 There is no HELP page. Holding `ok` draws the keyboard on the lid from
 `keymap.h`'s own lookups, so the on-device help cannot go stale.
@@ -93,8 +96,9 @@ focused deck. With a drum lane focused it lists `/groovebox/samples`: **AUX**
 previews, pads 1–8 put the sample on that lane.
 
 SONG page: `[` / `]` set the slot's pattern (an empty slot starts as the slot before it), `e`/`u` set the slot's filter target
-(below zero = none), `tab`/`p` set repeats 1–16, `fn sft a s d f g` toggle the
-slot's mutes for T1 T2 T3 DRUMS A B KICK, hold **AUX** = bounce.
+(below zero = none), `tab`/`p` set repeats 1–16, the top row mutes the slot
+when song mode is on, `m` lists `/groovebox/songs` (hold `\` loads the
+highlighted arrangement), hold **AUX** = bounce.
 
 SETTINGS page lists the focused track's own rows, then one shared block in
 amber that is the same for every track: BPM, SWING, KEY, BASSMODE, STYLE,
@@ -161,9 +165,12 @@ not written. With no song chain, it bounces four passes of the current pattern.
 
 ## Project files
 
-Saves are GBX **v4** (v3 plus the per-pattern mutes; v3 still loads). Microgroove v1 and v2 projects load and keep their own
-feel (straight 16ths, no decks); the next save writes v4. Deck audio is
-referenced by file name, never embedded.
+Saves are GBX **v5**: v3 plus the per-pattern mutes (v4), 32 patterns (the
+24 after the first eight follow the fixed block) and 13-row song-slot mutes.
+v3 and v4 still load; their slots get the pattern's mutes plus their old
+coarse slot mutes, so the song sounds as it did. Microgroove v1 and v2
+projects load and keep their own feel (straight 16ths, no decks); the next
+save writes v5. Deck audio is referenced by file name, never embedded.
 
 ```
 /groovebox/samples/      drum one-shots
@@ -171,7 +178,30 @@ referenced by file name, never embedded.
 /groovebox/projects/     P1.gbx – P8.gbx
 /groovebox/wavetables/   single-cycle WAVs
 /groovebox/bounce/       rendered takes
+/groovebox/songs/        arrangements (.arr) from the arranger
 ```
+
+## Arrangements
+
+`docs/arranger` is a static page (published at
+<https://emu-commits.github.io/filtre/arranger/>) that cuts a reference track
+into measures and lets you mark each with a pattern number and the muted
+rows. It saves a text file; `storageLoadArrangement` reads three kinds of
+line from it and skips the rest, which are the tool's own:
+
+```
+FILTRE-ARR 1
+BPM 124                  tempo, rounded (the tool keeps the exact one in TEMPO)
+P 1 2 main loop          pattern 1 is 2 bars long (the name is for the tool)
+S 1 4 1FE0               next slot: pattern 1, 4 times, mutes in hex (bit 0 = T1 .. bit 12 = D8)
+```
+
+Repeats are worked out when the file is saved: a run of measures with the
+same pattern and mutes becomes one slot, its length divided by the pattern's
+length (runs longer than 16 repeats are split). Loading replaces the chain,
+sets those pattern lengths and the tempo, and leaves notes, sounds and
+pattern mutes alone. Tests: `node tools/arranger-test/arr.test.mjs`,
+`beat.test.mjs`, and `ui.test.mjs <track>` (headless Chromium).
 
 ## Build and flash
 

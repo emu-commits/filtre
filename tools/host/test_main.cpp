@@ -185,7 +185,7 @@ int main() {
         CHECK(before8th > ref * 0.85, "recovered before the next 8th (%.0f vs %.0f)", before8th, ref);
 
         SECTION("ghost pump: kick muted by the song slot still pumps");
-        g_songMode = true; g_song[0] = { 0, 2, SLOT_MUTE_KICK, TARGET_NONE }; g_songLoopStart = 0;
+        g_songMode = true; g_song[0] = { 0, 2, MUTE_LANE(0), TARGET_NONE }; g_songLoopStart = 0;
         sequencerStart(true); auto ghost = render(bar * 2); quiet();
         CHECK(rms(ghost, k2 + 150, k2 + 700) < ref * 0.45, "ghost pump works");
         g_fx.ghost = 0; sequencerStart(true); auto noGhost = render(bar * 2); quiet();
@@ -352,6 +352,88 @@ int main() {
         seqSelectPattern(5);
         CHECK(g_curPattern == 5 && g_nextPattern == 5, "stopped: a pattern change is immediate");
         g_stemMask = STEM_ALL;
+    }
+
+    SECTION("song mode: the slot's mutes replace the pattern's, and neither copies to the other");
+    {
+        freshProject();
+        g_fx.pump = 0; g_fx.swing = 50; g_stemMask = STEM_DRUMS;
+        uint32_t bar = (uint32_t)(stepLen() * 16);
+        g_patterns[0].mute = MUTE_ALL_LANES;                   // the pattern itself: no drums
+        g_song[0] = { 0, 2, 0, TARGET_NONE };                  // the slot: everything on
+        g_songLoopStart = 0; g_songCursor = 0;
+        sequencerStart(true); auto pat = render(bar); quiet();
+        CHECK(rms(pat, 0, pat.size()) < 30, "pattern mode: the pattern's mutes (%.0f)", rms(pat, 0, pat.size()));
+        g_songMode = true;
+        CHECK(seqMuteMask() == 0, "stopped in song mode: the slot under the cursor decides");
+        sequencerStart(true); auto sng = render(bar);
+        CHECK(rms(sng, 0, sng.size()) > 400, "song mode: the slot un-mutes what the pattern mutes (%.0f)", rms(sng, 0, sng.size()));
+        uint8_t pt = 9; bool on = false;
+        int where = seqToggleMute(NUM_SYNTHS + NUM_DECKS + 12 - 5, &pt, &on);   // D8, the 13th row
+        CHECK(where == 1 && on && g_song[0].mute == MUTE_LANE(7) && g_slotMute == MUTE_LANE(7), "top row lands on the playing slot, all 13 rows (%d %04x)", where, g_song[0].mute);
+        CHECK(g_patterns[0].mute == MUTE_ALL_LANES, "the pattern's own mutes are untouched");
+        quiet(); g_songMode = false;
+        CHECK(seqMuteMask() == MUTE_ALL_LANES, "back in pattern mode: its mutes as they were left");
+        where = seqToggleMute(0, &pt, &on);
+        CHECK(where == 0 && pt == 0 && on && g_patterns[0].mute == (MUTE_ALL_LANES | MUTE_SYNTH(0)) && g_song[0].mute == MUTE_LANE(7), "pattern mode: the top row lands on the pattern only");
+        g_songMode = true; g_songCursor = 5;
+        CHECK(seqToggleMute(0, &pt, &on) == -1 && seqMuteMask() == 0, "song mode on an empty slot: nothing to mute");
+        g_songMode = false; g_songCursor = 0; g_stemMask = STEM_ALL;
+    }
+
+    SECTION("project v5: 13-row slot mutes; a v4 file's slot = pattern mutes + its old coarse ones");
+    {
+        freshProject();
+        g_patterns[2].mute = MUTE_SYNTH(1);
+        for (int i = 0; i < SONG_LENGTH; i++) g_song[i] = { 2, 3, 0x1F00, 77 };     // marks the high bytes in the file
+        g_song[1].mute = MUTE_LANE(7) | MUTE_DECK(0) | MUTE_SYNTH(2);
+        CHECK(storageSaveProject(5), "save P6");
+        freshProject();
+        CHECK(storageLoadProject(5) && g_song[1].mute == (MUTE_LANE(7) | MUTE_DECK(0) | MUTE_SYNTH(2)) && g_song[0].mute == 0x1F00 && g_song[1].repeats == 3 && g_song[1].target == 77,
+              "slot mutes come back whole (%04x)", g_song[1].mute);
+
+        // cut it down to what v4 wrote: no high bytes, version 4, coarse bits in the slot
+        std::string path = std::string(getenv("FILTRE_SD") ? getenv("FILTRE_SD") : "sd") + DIR_PROJECTS + "/P6.gbx";
+        std::vector<uint8_t> raw; { FILE* fp = fopen(path.c_str(), "rb"); int c; while (fp && (c = fgetc(fp)) != EOF) raw.push_back((uint8_t)c); if (fp) fclose(fp); }
+        size_t at = 0; int run = 0;
+        for (size_t i = 0; i < raw.size(); i++) { run = (raw[i] == 0x1F) ? run + 1 : 0; if (run == 2) { at = i - 1; break; } }
+        bool cut = at > 0 && at + SONG_LENGTH <= raw.size();
+        if (cut) {
+            raw.erase(raw.begin() + at, raw.begin() + at + SONG_LENGTH);
+            raw[4] = 4; raw[5] = 0;
+            raw[9 + 0 * 4 + 2] = 0x40 | 0x10;      // slot 1: old KICK + DECK A
+            raw[9 + 1 * 4 + 2] = 0x08;             // slot 2: old DRUMS
+            FILE* fp = fopen(path.c_str(), "wb"); fwrite(raw.data(), 1, raw.size(), fp); fclose(fp);
+        }
+        freshProject();
+        CHECK(cut && storageLoadProject(5), "the v4 file loads");
+        CHECK(g_song[0].mute == (MUTE_SYNTH(1) | MUTE_LANE(0) | MUTE_DECK(0)) && g_song[1].mute == (MUTE_SYNTH(1) | MUTE_ALL_LANES) && g_patterns[2].mute == MUTE_SYNTH(1),
+              "it sounds as it did: slot = pattern + old slot mutes (%04x %04x)", g_song[0].mute, g_song[1].mute);
+    }
+
+    SECTION("arrangement file: song chain, pattern lengths, tempo; nothing else");
+    {
+        freshProject();
+        std::string dir = std::string(getenv("FILTRE_SD") ? getenv("FILTRE_SD") : "sd") + DIR_SONGS;
+        SD.mkdir(DIR_SONGS);
+        { FILE* fp = fopen((dir + "/t.arr").c_str(), "w");
+          fputs("FILTRE-ARR 1\r\nNAME a very long name that is longer than the line buffer of the device, on purpose\n"
+                "BPM 126.4\nP 1 2 main loop\nP 9 1\nP 40 2\n\nS 1 4 0\nS 9 16 1FFF\nS 1 2 0041\nS 77 1 0\nS 32 99 fffff\n"
+                "AUDIO track.mp3\nM 1 8 1 0\n", fp); fclose(fp); }
+        { FILE* fp = fopen((dir + "/bad.arr").c_str(), "w"); fputs("hello\nS 1 1 0\n", fp); fclose(fp); }
+        g_patterns[0].mute = MUTE_DECK(1); g_patterns[0].drums[3] = 5; setPatternLength(8, NUM_STEPS);
+        g_song[10] = { 3, 2, 0, TARGET_NONE }; g_songLoopStart = 4;
+        CHECK(storageLoadArrangement("bad.arr") == -1 && g_song[10].pattern == 3, "a file that is not one is refused and changes nothing");
+        CHECK(storageLoadArrangement("nope.arr") == -1, "a missing file is refused");
+        int n = storageLoadArrangement("t.arr");
+        CHECK(n == 4, "four slots (%d)", n);
+        CHECK(g_song[0].pattern == 0 && g_song[0].repeats == 4 && g_song[0].mute == 0 && g_song[0].target == TARGET_NONE, "slot 1");
+        CHECK(g_song[1].pattern == 8 && g_song[1].repeats == 16 && g_song[1].mute == MUTE_MASK, "slot 2: all 13 rows muted (%04x)", g_song[1].mute);
+        CHECK(g_song[2].mute == (MUTE_SYNTH(0) | MUTE_LANE(1)), "slot 3 mutes (%04x)", g_song[2].mute);
+        CHECK(g_song[3].pattern == 31 && g_song[3].repeats == MAX_REPEATS && g_song[3].mute == MUTE_MASK, "out-of-range values are clamped, a bad pattern skipped");
+        CHECK(g_song[4].pattern == SONG_EMPTY && g_song[10].pattern == SONG_EMPTY && g_songLoopStart == 0, "the rest of the chain is cleared");
+        CHECK(g_bpm == 126 && patLen(g_patterns[0]) == NUM_STEPS && patLen(g_patterns[8]) == STEPS_PER_BAR, "tempo and pattern lengths (%u)", g_bpm);
+        CHECK(g_patterns[0].mute == MUTE_DECK(1) && g_patterns[0].drums[3] == 5 && g_patterns[0].drums[19] == 5, "notes and the pattern's own mutes stay; bar 2 starts as bar 1");
     }
 
     SECTION("phaser: stable, level-matched, and it moves");

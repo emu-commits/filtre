@@ -4,6 +4,9 @@
 Chop a record onto the keys, sweep one filter, let the 909 kick pump it, arrange
 the song and bounce mix + stems to SD. Guide: **[docs/FILTRE.md](docs/FILTRE.md)**.
 
+Study a reference track bar by bar and load its arrangement into the song
+page: **[the arranger](https://emu-commits.github.io/filtre/arranger/)**.
+
 FILTRE is a fork of **Microgroove** by [lebiro.studio](https://lebiro.studio)
 (MIT), which itself derives parts from
 [Cardputer-Adv-Tracker](https://github.com/qwertyuu/Cardputer-Adv-Tracker) by

@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FILTRE arranger</title>
+<meta name="description" content="Map a reference track bar by bar in FILTRE's patterns and mutes, and save it as a song FILTRE can load.">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="top">
+  <h1>FILTRE <span>arranger</span></h1>
+  <input id="name" class="name" type="text" placeholder="Track name" aria-label="Track name" maxlength="60">
+  <div class="files">
+    <button id="openAudio" class="primary">Open track</button>
+    <button id="openArr">Open .arr</button>
+    <button id="saveArr">Save .arr</button>
+    <button id="newDoc" class="quiet">New</button>
+    <input id="fileAudio" type="file" accept="audio/*,.mp3,.wav,.m4a,.flac,.ogg" hidden>
+    <input id="fileArr" type="file" accept=".arr,text/plain" hidden>
+  </div>
+</header>
+
+<p id="notice" class="notice" hidden></p>
+
+<section class="bar" aria-label="Playback">
+  <button id="play" class="primary play" title="Space">Play</button>
+  <span id="clock" class="clock">0:00.0</span>
+  <label class="tog" title="L"><input id="loop" type="checkbox"> Loop selection</label>
+  <label class="tog" title="K"><input id="click" type="checkbox"> Click on the beat</label>
+  <span class="grow"></span>
+  <span id="gridInfo" class="dim"></span>
+</section>
+
+<canvas id="overview" class="overview" height="56" aria-label="Whole track"></canvas>
+
+<details class="tempo" id="tempoBox">
+  <summary>Bar lines <span id="tempoSum" class="dim"></span></summary>
+  <div class="tempoRow">
+    <label>BPM <input id="bpm" type="number" min="40" max="300" step="0.01" value="120"></label>
+    <button data-g="half" title="Half tempo">&divide;2</button>
+    <button data-g="double" title="Double tempo">&times;2</button>
+    <span class="sep"></span>
+    <span class="lab">Bar line</span>
+    <button data-g="beat-">&#9668; beat</button>
+    <button data-g="beat+">beat &#9658;</button>
+    <button data-g="ms-10">&minus;10 ms</button>
+    <button data-g="ms-1">&minus;1</button>
+    <button data-g="ms+1">+1</button>
+    <button data-g="ms+10">+10 ms</button>
+    <button data-g="here" title="Put the nearest bar line where the playhead is">Bar line at playhead</button>
+    <span class="sep"></span>
+    <span class="lab">Measure 1</span>
+    <button data-g="bar-">&#9668; a bar earlier</button>
+    <button data-g="bar+">a bar later &#9658;</button>
+    <span class="sep"></span>
+    <button data-g="detect">Detect again</button>
+    <button data-g="add8" id="add8">+ 8 measures</button>
+  </div>
+  <p class="hint">The tool assumes a steady tempo in 4/4. Turn on <b>Click on the beat</b> and play: the high tick should land on the one of every bar, at the start and near the end. If it drifts late, raise the BPM a little; if it is on the wrong beat, move the bar line by a beat.</p>
+</details>
+
+<div class="work">
+  <main id="grid" class="grid" aria-label="Measures"></main>
+
+  <aside class="side">
+    <section class="panel" id="inspector">
+      <h2 id="selTitle">Nothing selected</h2>
+      <div class="field">
+        <div class="lab">Pattern <span class="dim">[ ] to step</span></div>
+        <div id="pats" class="pats"></div>
+      </div>
+      <div class="field" id="patField">
+        <div class="lab" id="patLab">Pattern</div>
+        <div class="patRow">
+          <div class="seg" role="group" aria-label="Pattern length">
+            <button id="bars1">1 bar</button><button id="bars2">2 bars</button>
+          </div>
+          <input id="patName" type="text" placeholder="what it is (main loop, break...)" maxlength="40" aria-label="Pattern name">
+        </div>
+        <div class="dim small" id="patNote"></div>
+      </div>
+      <div class="field">
+        <div class="lab">Parts <span class="dim">lit = playing, click to mute. Keys ` 1 2 ... = as on FILTRE</span></div>
+        <div id="parts" class="parts"></div>
+        <div class="partBtns">
+          <button id="allOn" class="quiet">All playing</button>
+          <button id="allOff" class="quiet">All muted</button>
+          <button id="asPrev" class="quiet" title="Same pattern and mutes as the measure before the selection">Same as before</button>
+          <button id="selRun" class="quiet" title="Select every neighbouring measure with this pattern and these mutes">Select whole section</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>The song FILTRE will get <span id="songCount" class="dim"></span></h2>
+      <ul id="issues" class="issues"></ul>
+      <ol id="song" class="song"></ol>
+      <p class="hint">Save the .arr file to <code>/groovebox/songs/</code> on the SD card. On FILTRE: SONG page, <kbd>m</kbd>, pick it, hold <kbd>\</kbd>, press <kbd>\</kbd> again. It sets the song chain, the pattern lengths and the tempo. Your notes, sounds and the patterns' own mutes are not touched.</p>
+    </section>
+  </aside>
+</div>
+
+<footer class="foot">
+  <span>Your track stays on this computer: it is decoded and analysed in the browser, never uploaded.</span>
+  <span>Click a measure to select it and hear it. Drag or shift-click for a range. Arrows move, Space plays, Ctrl+Z undoes.</span>
+</footer>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>
