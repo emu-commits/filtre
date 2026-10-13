@@ -6,8 +6,10 @@
 #include <SD.h>
 #include <math.h>
 #include <string.h>
+#include <stdlib.h>
 
-int16_t g_wavetables[NUM_WT_TOTAL][WT_SIZE];
+static int16_t s_builtin[NUM_BUILTIN_WT][WT_SIZE];
+const int16_t* g_wavetables[NUM_WT_TOTAL];
 char    g_wtNames[NUM_WT_TOTAL][WT_NAME_LEN];
 uint8_t g_numWavetables = 0;
 uint8_t g_wtUnison[NUM_WT_TOTAL];
@@ -23,11 +25,16 @@ static void normalizeTable(float* buf) {
     for (int i = 0; i < WT_SIZE; i++) buf[i] *= g;
 }
 
-static void commitTable(int slot, const float* buf, const char* name) {
+// user slots take their 512 bytes from the heap only when a file fills them
+static bool commitTable(int slot, const float* buf, const char* name) {
+    int16_t* t = slot < NUM_BUILTIN_WT ? s_builtin[slot] : (int16_t*)malloc(WT_SIZE * sizeof(int16_t));
+    if (!t) return false;
     for (int i = 0; i < WT_SIZE; i++)
-        g_wavetables[slot][i] = (int16_t)(buf[i] * 32767.0f);
+        t[i] = (int16_t)(buf[i] * 32767.0f);
+    g_wavetables[slot] = t;
     strncpy(g_wtNames[slot], name, WT_NAME_LEN - 1);
     g_wtNames[slot][WT_NAME_LEN - 1] = 0;
+    return true;
 }
 
 void wavetableInitBuiltins() {
@@ -141,8 +148,10 @@ void wavetableLoadUserFromSD() {
     if (!dir || !dir.isDirectory()) return;
 
     // temp buffer for decoded wav (single cycle files are small; cap 4096 frames)
+    // (on the heap for the scan only: boot runs this before the sample arena is sized)
     const int MAXF = 4096;
-    static int16_t tmp[MAXF];
+    int16_t* tmp = (int16_t*)malloc(MAXF * sizeof(int16_t));
+    if (!tmp) { dir.close(); return; }
 
     File f = dir.openNextFile();
     while (f && g_numWavetables < NUM_WT_TOTAL) {
@@ -169,12 +178,12 @@ void wavetableLoadUserFromSD() {
                 // strip extension for name
                 int dot = nm.lastIndexOf('.');
                 String base = (dot > 0) ? nm.substring(0, dot) : nm;
-                commitTable(g_numWavetables, buf, base.c_str());
-                g_numWavetables++;
+                if (commitTable(g_numWavetables, buf, base.c_str())) g_numWavetables++;
             }
         }
         f.close();
         f = dir.openNextFile();
     }
     dir.close();
+    free(tmp);
 }

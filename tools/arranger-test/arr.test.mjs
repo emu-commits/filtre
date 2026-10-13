@@ -38,6 +38,18 @@ const fill = (doc, from, n, pat, mute = 0) => { for (let i = 0; i < n; i++) doc.
   const bb = build(big);
   check(bb.slots.length === 140 && bb.issues.length === 1 && (serialize(big).match(/\nS /g) || []).length === 64, 'more than 64 slots: reported, file holds 64');
 }
+{ // 4-bar patterns and pattern 64: FILTRE's limits since the bar pool
+  const d = newDoc(); resize(d, 16);
+  d.patterns[64] = { bars: 4, name: 'verse' }; d.patterns[7] = { bars: 3, name: '' };
+  fill(d, 1, 10, 64); fill(d, 11, 3, 7);
+  const b = build(d), t = serialize(d), back = parse(t);
+  check(b.slots.length === 2 && b.slots[0].pat === 64 && b.slots[0].reps === 2 && b.slots[1].reps === 1, '10 measures of a 4-bar pattern = x2, 3 of a 3-bar = x1');
+  check(b.issues.length === 1 && b.issues[0].at === 8 && b.issues[0].len === 2 && place(b.runs, 8).orphan && place(b.runs, 9).orphan && !place(b.runs, 7).orphan, `the two left-over measures are reported together (${b.issues.map(i => i.text)})`);
+  check(place(b.runs, 6).bar === 2 && place(b.runs, 4).head, 'each measure knows which bar of the pattern it is');
+  check(t.includes('\nP 64 4 verse\n') && t.includes('\nP 7 3\n') && t.includes('\nS 64 2 0000\n'), 'the file names pattern 64 and its 4 bars');
+  check(back.patterns[64].bars === 4 && back.patterns[7].bars === 3 && JSON.stringify(back.measures) === JSON.stringify(d.measures), 'and it loads back the same');
+  check(parse('FILTRE-ARR 1\nP 1 9\nP 65 2\nS 65 1 0\nS 1 1 0\n').patterns[1].bars === 1 && !parse('FILTRE-ARR 1\nP 65 2\nS 1 1 0\n').patterns[65], 'out-of-range bars and patterns are refused');
+}
 { // tempo keeps its decimals for the grid; the device gets a whole number
   const d = newDoc(); d.bpm = 121.296; d.downbeat = 0.7301; d.name = 'x'; d.audio = 'a b.mp3'; resize(d, 4); fill(d, 1, 4, 1);
   const t = serialize(d), back = parse(t);

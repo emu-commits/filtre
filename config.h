@@ -22,9 +22,11 @@
 #define MAX_SLICES       16
 #define MAX_POLY         3     // voices per synth track (VOICES param 1..3)
 #define NUM_DRUM_LANES   8
-#define NUM_STEPS        32    // max steps per pattern (2 bars)
 #define STEPS_PER_BAR    16
-#define NUM_PATTERNS     32
+#define MAX_BARS         4     // bars per pattern
+#define NUM_STEPS        (MAX_BARS * STEPS_PER_BAR)
+#define NUM_PATTERNS     64
+#define NUM_BARS         96    // bars of pattern memory, shared by every pattern (226 bytes each)
 #define SONG_LENGTH      64
 #define SONG_EMPTY       0xFF
 
@@ -50,9 +52,9 @@
 // ---------- Sample memory ----------
 // One shared arena for everything that plays from RAM (deck A, deck B,
 // drum one-shots, mic/resample captures). Sized at boot from the free heap.
-#define ARENA_MAX_BYTES   (224 * 1024)
+#define ARENA_MAX_BYTES   (256 * 1024)
 #define ARENA_MIN_BYTES   (48 * 1024)
-#define ARENA_HEAP_RESERVE (56 * 1024)   // left for SD, lid, tasks, file buffers
+#define ARENA_HEAP_RESERVE (48 * 1024)   // left for the audio task (8 KB), SD, file buffers, the mic
 #define MAX_SAMPLES       16
 #define SAMPLE_NAME_LEN   32            // one-shot names (fixed by the GBX v1/v2 layout)
 #define LOOP_NAME_LEN     64            // deck files: real-world sample names are long

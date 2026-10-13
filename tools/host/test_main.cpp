@@ -58,6 +58,7 @@ static void freshProject() {
     g_nextPattern = 0;
 }
 static float stepLen() { return SAMPLE_RATE * 15.0f / g_bpm; }
+static void noDrums(int p) { for (int st = 0; st < NUM_STEPS; st++) patSetDrums(g_patterns[p], (uint8_t)st, 0, 0); }
 
 // a test loop: 8 tone bursts, one per 8th note, exactly one bar at `bpm`
 static std::vector<float> burstLoop(uint32_t rate, float bpm, std::vector<uint32_t>* onsets = nullptr, int bars = 1) {
@@ -172,7 +173,7 @@ int main() {
         uint32_t bar = (uint32_t)(stepLen() * 16);
 
         g_fx.pump = 0; quiet(); render(8000); sequencerStart(true); auto dry = render(bar * 2); quiet();
-        memset(g_patterns[0].drums, 0, NUM_STEPS);            // no kick at all
+        noDrums(0);                                           // no kick at all
         sequencerStart(true); auto none = render(bar * 2); quiet();
         CHECK(dry == none, "PUMP 0 is bit-identical to no kick");
 
@@ -200,7 +201,7 @@ int main() {
         for (auto& v : nz) { seed = seed * 1664525u + 1013904223u; v = ((seed >> 8) / 8388608.0f - 1.0f) * 0.5f; }
         writeWav("/groovebox/loops/noise.wav", nz, 44100, 1, 16);
         deckLoad(0, "noise.wav"); g_decks[0].mode = DECK_LOOP; g_decks[0].fitBars = 1;
-        g_fx.pump = 0; g_fx.reso = 20; g_stemMask = STEM_DECKS; memset(g_patterns[0].drums, 0, NUM_STEPS);
+        g_fx.pump = 0; g_fx.reso = 20; g_stemMask = STEM_DECKS; noDrums(0);
         uint32_t bar = (uint32_t)(stepLen() * 16);
         double lvl[3]; uint8_t cuts[3] = { 255, 128, 20 };
         for (int i = 0; i < 3; i++) { g_fx.cutoff = cuts[i]; render(8000); fxReset(); sequencerStart(true); auto o = render(bar); quiet(); lvl[i] = rms(o, 2000, bar); }
@@ -219,22 +220,22 @@ int main() {
         freshProject();
         deckLoad(0, "b441.wav"); g_decks[0].mode = DECK_CHOP;
         g_fx.pump = 0; g_fx.cutoff = 255; g_fx.swing = 50; g_stemMask = STEM_DECKS;
-        Pattern& p = g_patterns[0]; memset(p.drums, 0, NUM_STEPS);
-        p.chop[0][0] = 1; p.chop[0][4] = 3; p.chop[0][10] = 5;
+        Pattern& p = g_patterns[0]; noDrums(0);
+        patSetChop(p, 0, 0, 1); patSetChop(p, 0, 4, 3); patSetChop(p, 0, 10, 5);
         sequencerStart(true); auto o = render((uint32_t)(stepLen() * 16)); quiet();
         float P = stepLen();
         CHECK(rms(o, 0, 600) > 2000 && rms(o, (size_t)(4 * P), (size_t)(4 * P) + 600) > 2000 && rms(o, (size_t)(10 * P), (size_t)(10 * P) + 600) > 2000, "slices sound on their steps");
         CHECK(rms(o, (size_t)(2.5f * P), (size_t)(3.5f * P)) < 200, "silence between chops");
 
-        memset(p.chop, 0, sizeof(p.chop));
+        for (int st = 0; st < 16; st++) patSetChop(p, 0, (uint8_t)st, 0);
         g_recEnabled = true; sequencerStart(true);
         render((uint32_t)(6 * P) + 900 + 30);                 // player hits just after step 7 sounds
         liveDeckHit(0, 2, false);
         render((uint32_t)(3 * P));
         liveDrumHit(2, true);                                  // ~step 10
         render((uint32_t)(8 * P)); quiet(); g_recEnabled = false;
-        CHECK(p.chop[0][6] == 3, "pad recorded on step 7 (latency compensated)");
-        int hat = -1; for (int i = 0; i < 16; i++) if ((p.drums[i] & 4) && (p.drumAcc[i] & 4)) hat = i;
+        CHECK(patChop(p, 0, 6) == 3, "pad recorded on step 7 (latency compensated)");
+        int hat = -1; for (int i = 0; i < 16; i++) if ((patDrums(p, i) & 4) && (patDrumAcc(p, i) & 4)) hat = i;
         CHECK(hat == 9, "accented drum hit recorded on step 10 (got %d)", hat + 1);
         g_stemMask = STEM_ALL;
     }
@@ -243,7 +244,7 @@ int main() {
     {
         freshProject();
         Pattern& p = g_patterns[0];
-        for (int i = 0; i < 16; i++) { p.lock[i] = (uint8_t)(i * 16); p.lockSet |= 1u << i; }
+        for (int i = 0; i < 16; i++) patSetLock(p, (uint8_t)i, (uint8_t)(i * 16));
         g_fx.swing = 50; sequencerStart(true);
         uint32_t bar = (uint32_t)(stepLen() * 16); std::vector<float> cut(bar * 2); int16_t s;
         for (uint32_t i = 0; i < bar * 2; i++) { engineRender(&s, 1, 1.0f); cut[i] = g_cutNow; }
@@ -255,7 +256,7 @@ int main() {
         CHECK(diff < 1.5f, "bar 2 repeats bar 1 (%.2f)", diff);
         CHECK(fabsf(cut[(uint32_t)(stepLen() * 8)] - 128) < 3, "mid-bar value %.1f", cut[(uint32_t)(stepLen() * 8)]);
         g_curTrack = TRK_DECK_A; clearPattern(0);
-        CHECK(g_patterns[0].lockSet == 0, "CLR pattern clears its locks");
+        CHECK(!patAnyLock(g_patterns[0]) && patBarsFree() >= NUM_BARS - 1, "CLR pattern clears its locks and gives its bars back (%u free)", patBarsFree());
     }
 
     SECTION("song: repeats, targets, mutes, one-shot end");
@@ -294,17 +295,28 @@ int main() {
 
     SECTION("project v3 round trip + upstream v1 file");
     {
-        Pattern keep = g_patterns[1]; FxParams fx = g_fx; SongSlot sl = g_song[2];
-        setPatternLength(1, NUM_STEPS); g_patterns[1].chop[0][20] = 4 | CHOP_ACC; g_patterns[1].lock[31] = 200; g_patterns[1].lockSet |= 1u << 31;
+        FxParams fx = g_fx; SongSlot sl = g_song[2];
+        setPatternLength(1, NUM_STEPS); patSetChop(g_patterns[1], 0, 20, 4 | CHOP_ACC); patSetLock(g_patterns[1], 63, 200);
+        { SynthCell c; c.setMono(10, 3, true, false); c.add(1, 4); c.add(5, 7); patSetCell(g_patterns[1], 2, 40, c); }
         g_patterns[1].mute = MUTE_SYNTH(1) | MUTE_DECK(1) | MUTE_LANE(3);
         g_patterns[5].mute = MUTE_LANE(0);
-        keep = g_patterns[1];
+        patSetDrums(g_patterns[NUM_PATTERNS - 1], 5, 0x81, 0x80); setPatternLength(NUM_PATTERNS - 1, 48);
+        g_song[7] = { (uint8_t)(NUM_PATTERNS - 1), 3, MUTE_LANE(7), 100, 0 };
+        pastePattern(1, 40);                                   // the copy to compare with after the reload
+        pastePattern(NUM_PATTERNS - 1, 41);
+        uint8_t used = (uint8_t)(NUM_BARS - patBarsFree());
         deckUnload(0); deckLoad(0, "FILTRE-DEMO.wav"); g_decks[0].mode = DECK_CHOP; deckNudgeSlice(0, 1, 30);
         Deck dk = g_decks[0]; g_fx.key = 4; g_fx.reso = 99; fx = g_fx; uint16_t bpm = g_bpm = 124;
         CHECK(storageSaveProject(2), "save P3");
         freshProject();
         CHECK(storageLoadProject(2), "load P3");
-        CHECK(memcmp(&keep, &g_patterns[1], sizeof(Pattern)) == 0, "pattern (32 steps, chops, locks) identical");
+        CHECK(patLen(g_patterns[1]) == 64 && patEqual(g_patterns[40], g_patterns[1]), "4-bar pattern (notes, chops, locks) identical");
+        { SynthCell c = patCell(g_patterns[1], 2, 40);
+          CHECK(c.note[0] == 10 && c.oct[0] == 3 && c.note[1] == 1 && c.oct[1] == 4 && c.note[2] == 5 && c.oct[2] == 7 && c.accent && !c.slide, "a chord survives the 3-byte step"); }
+        CHECK(patLen(g_patterns[NUM_PATTERNS - 1]) == 48 && patEqual(g_patterns[41], g_patterns[NUM_PATTERNS - 1]) && patDrums(g_patterns[NUM_PATTERNS - 1], 37) == 0x81,
+              "the last pattern, 3 bars, identical");
+        CHECK(g_song[7].pattern == NUM_PATTERNS - 1 && g_song[7].mute == MUTE_LANE(7), "a slot can name pattern %d", NUM_PATTERNS);
+        CHECK(NUM_BARS - patBarsFree() == used, "the reload takes the same bars (%u vs %u)", NUM_BARS - patBarsFree(), used);
         CHECK(memcmp(&fx, &g_fx, sizeof(FxParams)) == 0 && g_bpm == bpm, "fx + bpm identical");
         CHECK(g_patterns[1].mute == (MUTE_SYNTH(1) | MUTE_DECK(1) | MUTE_LANE(3)) && g_patterns[5].mute == MUTE_LANE(0) && g_patterns[0].mute == 0,
               "mutes come back per pattern (%03x %03x)", g_patterns[1].mute, g_patterns[5].mute);
@@ -314,7 +326,7 @@ int main() {
 
         CHECK(storageLoadProject(0), "upstream factory P1.gbx (v1) loads");
         CHECK(g_fx.swing == 50 && !deckLoaded(0), "legacy project: straight, no decks");
-        bool any = false; for (int st = 0; st < 16; st++) if (g_patterns[0].drums[st]) any = true;
+        bool any = false; for (int st = 0; st < 16; st++) if (patDrums(g_patterns[0], st)) any = true;
         CHECK(any && patLen(g_patterns[0]) == 16 && g_song[0].repeats == 1 && g_song[0].target == TARGET_NONE, "v1 patterns + song migrated");
         sequencerStart(true); auto o = render(40000); quiet();
         CHECK(rms(o, 0, 40000) > 500, "v1 project makes sound");
@@ -326,7 +338,7 @@ int main() {
         g_fx.pump = 0; g_fx.swing = 50; g_stemMask = STEM_DRUMS;
         uint32_t bar = (uint32_t)(stepLen() * 16);
         pastePattern(0, 1); pastePattern(0, 2);
-        CHECK(memcmp(g_patterns[0].drums, g_patterns[2].drums, NUM_STEPS) == 0, "paste copies the pattern");
+        CHECK(patEqual(g_patterns[0], g_patterns[2]) && g_patterns[0].bar[0] != g_patterns[2].bar[0], "paste copies the pattern into its own bar");
         g_patterns[1].mute = MUTE_ALL_LANES;                   // pattern 2: every drum lane off
         g_patterns[2].mute = MUTE_ALL_LANES & ~MUTE_LANE(0);   // pattern 3: kick only
 
@@ -379,36 +391,107 @@ int main() {
         g_songMode = true; g_songCursor = 5;
         CHECK(seqToggleMute(0, &pt, &on) == -1 && seqMuteMask() == 0, "song mode on an empty slot: nothing to mute");
         g_songMode = false; g_songCursor = 0; g_stemMask = STEM_ALL;
+        // the SONG page is always slot mutes, whatever song mode says elsewhere
+        g_curPage = PAGE_SONG; g_songMode = false; g_playing = false;
+        where = seqToggleMute(1, &pt, &on);
+        CHECK(where == 1 && g_song[0].mute == (MUTE_LANE(7) | MUTE_SYNTH(1)) && seqEditMask() == g_song[0].mute, "SONG page, song mode off: the top row still edits the slot");
+        CHECK(seqMuteMask() == g_patterns[0].mute, "...and what you hear still follows song mode (pattern)");
+        g_curPage = PAGE_PATTERN;
+        CHECK(seqEditMask() == g_patterns[0].mute, "back on PATTERN: the pattern's mutes, song mode untouched");
+        g_song[0].mute = 0;
     }
 
-    SECTION("project v5: 13-row slot mutes; a v4 file's slot = pattern mutes + its old coarse ones");
+    SECTION("project v6: 13-row slot mutes; v5 and v4 files written by the older firmware still load");
     {
         freshProject();
         g_patterns[2].mute = MUTE_SYNTH(1);
-        for (int i = 0; i < SONG_LENGTH; i++) g_song[i] = { 2, 3, 0x1F00, 77 };     // marks the high bytes in the file
+        for (int i = 0; i < SONG_LENGTH; i++) g_song[i] = { 2, 3, 0x1F00, 77 };
         g_song[1].mute = MUTE_LANE(7) | MUTE_DECK(0) | MUTE_SYNTH(2);
         CHECK(storageSaveProject(5), "save P6");
         freshProject();
         CHECK(storageLoadProject(5) && g_song[1].mute == (MUTE_LANE(7) | MUTE_DECK(0) | MUTE_SYNTH(2)) && g_song[0].mute == 0x1F00 && g_song[1].repeats == 3 && g_song[1].target == 77,
               "slot mutes come back whole (%04x)", g_song[1].mute);
+        { std::string path = std::string(getenv("FILTRE_SD") ? getenv("FILTRE_SD") : "sd") + DIR_PROJECTS + "/P6.gbx";
+          FILE* fp = fopen(path.c_str(), "rb"); long sz = 0; if (fp) { fseek(fp, 0, SEEK_END); sz = ftell(fp); fclose(fp); }
+          CHECK(sz > 1000 && sz < 2400, "a project with one drum bar is a small file (%ld bytes; v5 was 27960)", sz); }
 
-        // cut it down to what v4 wrote: no high bytes, version 4, coarse bits in the slot
-        std::string path = std::string(getenv("FILTRE_SD") ? getenv("FILTRE_SD") : "sd") + DIR_PROJECTS + "/P6.gbx";
-        std::vector<uint8_t> raw; { FILE* fp = fopen(path.c_str(), "rb"); int c; while (fp && (c = fgetc(fp)) != EOF) raw.push_back((uint8_t)c); if (fp) fclose(fp); }
-        size_t at = 0; int run = 0;
-        for (size_t i = 0; i < raw.size(); i++) { run = (raw[i] == 0x1F) ? run + 1 : 0; if (run == 2) { at = i - 1; break; } }
-        bool cut = at > 0 && at + SONG_LENGTH <= raw.size();
-        if (cut) {
-            raw.erase(raw.begin() + at, raw.begin() + at + SONG_LENGTH);
-            raw[4] = 4; raw[5] = 0;
-            raw[9 + 0 * 4 + 2] = 0x40 | 0x10;      // slot 1: old KICK + DECK A
-            raw[9 + 1 * 4 + 2] = 0x08;             // slot 2: old DRUMS
-            FILE* fp = fopen(path.c_str(), "wb"); fwrite(raw.data(), 1, raw.size(), fp); fclose(fp);
-        }
+        // fixtures/v5.gbx: saved by the firmware at 5e62861 (fixtures/gen_main.cpp says what is in it)
         freshProject();
-        CHECK(cut && storageLoadProject(5), "the v4 file loads");
+        patSetDrums(g_patterns[50], 0, 1, 0);                  // must not survive the load
+        CHECK(storageLoadProject(6), "the v5 file loads");
+        const Pattern& q = g_patterns[1];
+        SynthCell ch = patCell(q, 2, 20), sl = patCell(q, 0, 3);
+        CHECK(patLen(q) == 32 && ch.note[0] == 10 && ch.oct[0] == 3 && ch.note[1] == 1 && ch.oct[1] == 4 && ch.note[2] == 5 && ch.oct[2] == 7 && ch.accent,
+              "v5: two bars, the chord on step 21");
+        CHECK(sl.note[0] == 12 && sl.oct[0] == 2 && sl.slide && !sl.accent, "v5: the slide");
+        CHECK(patChop(q, 0, 20) == (4 | CHOP_ACC) && patChop(q, 1, 31) == (16 | CHOP_REV) && patLocked(q, 31) && patLock(q, 31) == 200 && !patLocked(q, 30),
+              "v5: chops and the lock on the last step");
+        CHECK(patDrums(q, 17) == 0x81 && patDrumAcc(q, 17) == 0x80 && q.mute == MUTE_DECK(1), "v5: drums, accents, the pattern's mutes");
+        CHECK(patDrums(g_patterns[20], 5) == 0x24 && patDrumAcc(g_patterns[20], 5) == 0x04 && g_patterns[20].mute == MUTE_LANE(3) && patCell(g_patterns[31], 1, 15).note[0] == 7,
+              "v5: the patterns in the file's tail (21 and 32)");
+        CHECK(patDrums(g_patterns[0], 0) & 1, "v5: pattern 1 keeps its kick");
+        CHECK(g_bpm == 131 && g_fx.key == 4 && g_fx.reso == 99 && g_song[1].mute == (MUTE_LANE(7) | MUTE_DECK(0) | MUTE_SYNTH(2)) && g_song[0].mute == 0x1F00,
+              "v5: tempo, fx, slot mutes (%04x)", g_song[1].mute);
+        CHECK(!g_patterns[50].bar[0] && !g_patterns[40].bar[0] && patLen(g_patterns[63]) == 16, "v5: the patterns it never had are empty");
+        CHECK(NUM_BARS - patBarsFree() == 5, "v5: only the bars with something in them are taken (%u)", NUM_BARS - patBarsFree());
+
+        // fixtures/v4.gbx: the same project as v4 wrote it (no high bytes, coarse bits in the slot)
+        freshProject();
+        CHECK(storageLoadProject(7), "the v4 file loads");
         CHECK(g_song[0].mute == (MUTE_SYNTH(1) | MUTE_LANE(0) | MUTE_DECK(0)) && g_song[1].mute == (MUTE_SYNTH(1) | MUTE_ALL_LANES) && g_patterns[2].mute == MUTE_SYNTH(1),
               "it sounds as it did: slot = pattern + old slot mutes (%04x %04x)", g_song[0].mute, g_song[1].mute);
+        CHECK(patDrums(g_patterns[20], 5) == 0x24 && patChop(g_patterns[1], 0, 20) == (4 | CHOP_ACC), "v4: patterns and the tail");
+    }
+
+    SECTION("pattern memory: 4 bars, one shared pool, full means full");
+    {
+        freshProject();
+        const uint8_t free0 = patBarsFree();
+        CHECK(free0 == NUM_BARS - 1 && sizeof(Pattern) == 8 && sizeof(PatBar) == 226, "a fresh project holds one bar (%u free)", free0);
+        Pattern& p = g_patterns[9];
+        setPatternLength(9, 64);
+        CHECK(patLen(p) == 64 && patBarsFree() == free0, "an empty pattern is 4 bars long and costs nothing");
+        { SynthCell c; c.setMono(1, 4, false, false); patSetCell(p, 0, 50, c); }
+        CHECK(patBarsFree() == free0 - 1 && patCell(p, 0, 50).note[0] == 1 && patCell(p, 0, 34).empty(), "the first note in bar 4 takes one bar");
+        g_curPattern = 9; g_curTrack = 0; g_curStep = 50; clearCellAtCursor();
+        CHECK(patBarsFree() == free0, "clearing the last thing in a bar gives it back");
+        g_curPattern = 0; g_curStep = 0;
+
+        // 4 bars play in order: one kick, on the first step of bar 4 only
+        noDrums(0); setPatternLength(0, 64); patSetDrums(g_patterns[0], 48, 1, 0);
+        g_fx.pump = 0; g_fx.swing = 50; g_stemMask = STEM_DRUMS;
+        uint32_t bar = (uint32_t)(stepLen() * 16);
+        sequencerStart(true); auto o = render(bar * 4 + 2000); quiet(); g_stemMask = STEM_ALL;
+        CHECK(rms(o, 0, bar * 3 - 200) < 50 && rms(o, bar * 3, bar * 3 + 1500) > 1500, "bar 4 plays as bar 4 (%.0f, %.0f)", rms(o, 0, bar * 3 - 200), rms(o, bar * 3, bar * 3 + 1500));
+        setPatternLength(0, 16);
+        CHECK(patBarsFree() == free0 && !patDrums(g_patterns[0], 48), "shrinking frees the bars beyond the length");
+
+        // growing repeats what is there: 1 -> 4 gives four copies, each its own bar
+        patSetDrums(g_patterns[0], 2, 4, 4); setPatternLength(0, 64);
+        CHECK(patDrums(g_patterns[0], 18) == 4 && patDrums(g_patterns[0], 50) == 4 && patDrumAcc(g_patterns[0], 34) == 4 && patBarsFree() == NUM_BARS - 4, "1 bar grown to 4 repeats it");
+        patSetDrums(g_patterns[0], 50, 0, 0);
+        CHECK(patDrums(g_patterns[0], 2) == 4 && patDrums(g_patterns[0], 50) == 0, "the copies are independent");
+
+        // fill the pool
+        g_patFull = false;
+        int wrote = 0;
+        for (int i = 1; i < NUM_PATTERNS && !g_patFull; i++) {
+            setPatternLength((uint8_t)i, 64);
+            for (int b = 0; b < MAX_BARS && !g_patFull; b++) if (patSetDrums(g_patterns[i], (uint8_t)(b * 16), 1, 0)) wrote++;
+        }
+        CHECK(g_patFull && patBarsFree() == 0 && wrote == NUM_BARS - 4, "the pool fills at %d bars and says so (%d written)", NUM_BARS, wrote);
+        CHECK(!patSetDrums(g_patterns[NUM_PATTERNS - 1], 0, 1, 0) && patDrums(g_patterns[NUM_PATTERNS - 1], 0) == 0, "a write with no bar left is refused, not lost into another pattern");
+        CHECK(patSetDrums(g_patterns[NUM_PATTERNS - 1], 0, 0, 0), "writing nothing never needs memory");
+        clearPattern(1);
+        CHECK(patBarsFree() == 4 && patSetDrums(g_patterns[NUM_PATTERNS - 1], 0, 1, 0), "clearing a pattern makes room again");
+        CHECK(storageSaveProject(4), "a full pool saves");
+        uint8_t left = patBarsFree(); bool same = true;
+        pastePattern(0, 1);                                    // will not fit entirely; the load must still be exact
+        freshProject(); CHECK(storageLoadProject(4), "and loads");
+        for (int i = 2; i < NUM_PATTERNS; i++) for (int b = 0; b < MAX_BARS; b++)
+            if ((patDrums(g_patterns[i], (uint8_t)(b * 16)) & 1) != (g_patterns[i].bar[b] ? 1 : 0)) same = false;
+        // pattern 1, bar 4 was emptied by hand above: an empty bar is not stored, so it comes back free
+        CHECK(same && patBarsFree() == left + 1 && !g_patterns[0].bar[3] && patLen(g_patterns[5]) == 64, "every bar back where it was, the empty one dropped (%u free, was %u)", patBarsFree(), left);
     }
 
     SECTION("arrangement file: song chain, pattern lengths, tempo; nothing else");
@@ -421,7 +504,7 @@ int main() {
                 "BPM 126.4\nP 1 2 main loop\nP 9 1\nP 40 2\n\nS 1 4 0\nS 9 16 1FFF\nS 1 2 0041\nS 77 1 0\nS 32 99 fffff\n"
                 "AUDIO track.mp3\nM 1 8 1 0\n", fp); fclose(fp); }
         { FILE* fp = fopen((dir + "/bad.arr").c_str(), "w"); fputs("hello\nS 1 1 0\n", fp); fclose(fp); }
-        g_patterns[0].mute = MUTE_DECK(1); g_patterns[0].drums[3] = 5; setPatternLength(8, NUM_STEPS);
+        g_patterns[0].mute = MUTE_DECK(1); patSetDrums(g_patterns[0], 3, 5, 0); setPatternLength(8, NUM_STEPS);
         g_song[10] = { 3, 2, 0, TARGET_NONE }; g_songLoopStart = 4;
         CHECK(storageLoadArrangement("bad.arr") == -1 && g_song[10].pattern == 3, "a file that is not one is refused and changes nothing");
         CHECK(storageLoadArrangement("nope.arr") == -1, "a missing file is refused");
@@ -432,15 +515,15 @@ int main() {
         CHECK(g_song[2].mute == (MUTE_SYNTH(0) | MUTE_LANE(1)), "slot 3 mutes (%04x)", g_song[2].mute);
         CHECK(g_song[3].pattern == 31 && g_song[3].repeats == MAX_REPEATS && g_song[3].mute == MUTE_MASK, "out-of-range values are clamped, a bad pattern skipped");
         CHECK(g_song[4].pattern == SONG_EMPTY && g_song[10].pattern == SONG_EMPTY && g_songLoopStart == 0, "the rest of the chain is cleared");
-        CHECK(g_bpm == 126 && patLen(g_patterns[0]) == NUM_STEPS && patLen(g_patterns[8]) == STEPS_PER_BAR, "tempo and pattern lengths (%u)", g_bpm);
-        CHECK(g_patterns[0].mute == MUTE_DECK(1) && g_patterns[0].drums[3] == 5 && g_patterns[0].drums[19] == 5, "notes and the pattern's own mutes stay; bar 2 starts as bar 1");
+        CHECK(g_bpm == 126 && patLen(g_patterns[0]) == 32 && patLen(g_patterns[8]) == STEPS_PER_BAR && patLen(g_patterns[39]) == 32, "tempo and pattern lengths (%u)", g_bpm);
+        CHECK(g_patterns[0].mute == MUTE_DECK(1) && patDrums(g_patterns[0], 3) == 5 && patDrums(g_patterns[0], 19) == 5, "notes and the pattern's own mutes stay; bar 2 starts as bar 1");
     }
 
     SECTION("phaser: stable, level-matched, and it moves");
     {
         freshProject();
         deckLoad(0, "noise.wav"); g_decks[0].mode = DECK_LOOP; g_decks[0].fitBars = 1;
-        g_fx.pump = 0; g_fx.reso = 0; g_stemMask = STEM_DECKS; memset(g_patterns[0].drums, 0, NUM_STEPS);
+        g_fx.pump = 0; g_fx.reso = 0; g_stemMask = STEM_DECKS; noDrums(0);
         uint32_t bar = (uint32_t)(stepLen() * 16);
         g_fx.type = FLT_LP; g_fx.cutoff = 255; fxReset(); sequencerStart(true); auto dry = render(bar); quiet();
         g_fx.type = FLT_PHASER; g_fx.cutoff = 128; fxReset(); sequencerStart(true); auto ph = render(bar * 4); quiet();

@@ -91,28 +91,31 @@ kbd, code { background: #000; border: 1px solid var(--line); border-radius: 3px;
 .m.now .head { display: block; }
 .m.sectionStart::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 2px; background: var(--text); opacity: .55; }
 
-.side { position: sticky; top: 8px; display: grid; gap: 12px; max-height: calc(100vh - 16px); overflow: auto; }
+.side { min-width: 0; position: sticky; top: 8px; display: grid; gap: 12px; max-height: calc(100vh - 16px); overflow: auto; }
 .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 12px; }
 .panel h2 { font-weight: 700; margin-bottom: 8px; }
 .field { margin-top: 10px; }
 .field .lab { color: var(--text); margin-bottom: 5px; }
 .field .lab .dim { font-size: 12px; }
 
-.pats { display: grid; grid-template-columns: repeat(11, 1fr); gap: 3px; }
+.pats { display: grid; grid-template-columns: repeat(11, minmax(0, 1fr)); gap: 3px; }
+.pats button:first-child { grid-column: span 2; }   /* "none" + 64 patterns = 6 full rows */
 .pats button { padding: 4px 0; text-align: center; border-color: var(--line); color: var(--dim); }
 .pats button.used { color: var(--c); border-color: var(--c); }
 .pats button.cur { background: var(--c); color: #0b0906; border-color: var(--c); font-weight: 700; }
 .pats button.two::after { content: ":"; }
 
 .patRow { display: flex; gap: 8px; }
-.patRow input { flex: 1; }
+.patRow input { flex: 1; min-width: 0; }
+.seg button { padding: 5px 8px; }
 .seg { display: inline-flex; }
 .seg button { border-radius: 0; }
 .seg button:first-child { border-radius: 4px 0 0 4px; }
-.seg button:last-child { border-radius: 0 4px 4px 0; margin-left: -1px; }
+.seg button + button { margin-left: -1px; }
+.seg button:last-child { border-radius: 0 4px 4px 0; }
 .seg button.cur { background: var(--text); color: #0b0906; border-color: var(--text); font-weight: 700; }
 
-.parts { display: grid; grid-template-columns: repeat(13, 1fr); gap: 3px; }
+.parts { display: grid; grid-template-columns: repeat(13, minmax(0, 1fr)); gap: 3px; }
 .parts button { padding: 8px 0 6px; text-align: center; font-size: 12px; border-color: var(--pc); background: var(--pc); color: #0b0906; font-weight: 700; }
 .parts button.off { background: #000; color: var(--dim); border-color: var(--line2); font-weight: 400; text-decoration: line-through; }
 .parts button.mixed { background: repeating-linear-gradient(135deg, var(--pc) 0 4px, #000 4px 8px); color: var(--text); }
@@ -141,7 +144,7 @@ body.drop::after { content: "Drop a track or an .arr file"; position: fixed; ins
 }
 @media (max-width: 640px) {
   .grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
-  .pats { grid-template-columns: repeat(8, 1fr); }
+  .pats { grid-template-columns: repeat(11, minmax(0, 1fr)); }
   .parts button { font-size: 10px; padding: 8px 0; }
   .tempoRow .sep { display: none; }
 }

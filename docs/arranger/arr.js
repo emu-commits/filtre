@@ -5,11 +5,12 @@
 //
 // A document:
 //   { name, audio, bpm, downbeat,
-//     patterns: { 1: { bars: 1|2, name }, ... },      only the ones touched
-//     measures: [ { pat: 0..32, mute: 13 bits }, ... ] index 0 = measure 1, pat 0 = nothing yet }
+//     patterns: { 1: { bars: 1..4, name }, ... },     only the ones touched
+//     measures: [ { pat: 0..64, mute: 13 bits }, ... ] index 0 = measure 1, pat 0 = nothing yet }
 //
 // FILTRE's limits (config.h / sequencer.h)
-export const NUM_PATTERNS = 32;
+export const NUM_PATTERNS = 64;
+export const MAX_BARS = 4;                  // bars per pattern
 export const SONG_LENGTH = 64;
 export const MAX_REPEATS = 16;
 // the 13 grid rows = the 13 mute keys, bit 0 first
@@ -23,13 +24,17 @@ export function newDoc() {
 
 export function patBars(doc, pat) {
   const p = doc.patterns[pat];
-  return p && p.bars === 2 ? 2 : 1;
+  return clampBars(p && p.bars);
+}
+export function clampBars(n) {
+  n = parseInt(n, 10);
+  return n >= 1 && n <= MAX_BARS ? n : 1;
 }
 
 // Runs: neighbouring measures with the same pattern and the same mutes. Each
 // one becomes a song slot (or several: a slot repeats 16 times at most).
-// A two-bar pattern has to fit its run a whole number of times; where it does
-// not, the left-over measure is reported and left out of the song.
+// A pattern longer than a bar has to fit its run a whole number of times; where
+// it does not, the left-over measures are reported and left out of the song.
 export function build(doc) {
   const m = doc.measures, runs = [], issues = [];
   let first = 0, last = m.length - 1;
@@ -42,7 +47,8 @@ export function build(doc) {
     const run = { start: i, len, pat, mute: m[i].mute, bars, reps: Math.floor(len / bars), rest: len % bars };
     runs.push(run);
     if (!pat) issues.push({ at: i, len, text: `Measure${len > 1 ? 's' : ''} ${span(i, len)}: no pattern. The song would skip ${len > 1 ? 'them' : 'it'}.` });
-    else if (run.rest) issues.push({ at: i + len - 1, len: 1, text: `Measure ${i + len}: P${pat} is 2 bars long but only its first bar fits here. Left out of the song.` });
+    else if (run.rest) issues.push({ at: i + run.reps * bars, len: run.rest,
+      text: `Measure${run.rest > 1 ? 's' : ''} ${span(i + run.reps * bars, run.rest)}: P${pat} is ${bars} bars long but only ${run.rest === 1 ? 'its first bar fits' : `its first ${run.rest} bars fit`} here. Left out of the song.` });
     i = j;
   }
   const slots = [];
@@ -60,7 +66,7 @@ export function build(doc) {
 function span(i, len) { return len > 1 ? `${i + 1}-${i + len}` : `${i + 1}`; }
 
 // where a measure sits inside its run: which bar of the pattern, and whether
-// it is the left-over half of a two-bar pattern
+// it is a left-over part of a pattern that did not fit whole
 export function place(runs, i) {
   for (const r of runs) {
     if (i < r.start || i >= r.start + r.len) continue;
@@ -87,7 +93,7 @@ export function serialize(doc) {
   const pats = new Set([...b.used, ...Object.keys(doc.patterns).map(Number)]);
   for (const p of [...pats].sort((x, y) => x - y)) {
     const d = doc.patterns[p] || {};
-    out.push(`P ${p} ${d.bars === 2 ? 2 : 1}${d.name ? ' ' + oneLine(d.name) : ''}`);
+    out.push(`P ${p} ${clampBars(d.bars)}${d.name ? ' ' + oneLine(d.name) : ''}`);
   }
   for (const s of b.slots.slice(0, SONG_LENGTH)) out.push(`S ${s.pat} ${s.reps} ${hex(s.mute)}`);
   if (doc.audio) out.push('AUDIO ' + oneLine(doc.audio));
@@ -116,7 +122,7 @@ export function parse(text) {
     else if (key === 'MEASURES') count = parseInt(rest, 10) || 0;
     else if (key === 'P') {
       const p = parseInt(f[0], 10);
-      if (p >= 1 && p <= NUM_PATTERNS) doc.patterns[p] = { bars: f[1] === '2' ? 2 : 1, name: f.slice(2).join(' ') };
+      if (p >= 1 && p <= NUM_PATTERNS) doc.patterns[p] = { bars: clampBars(f[1]), name: f.slice(2).join(' ') };
     } else if (key === 'S') {
       const p = parseInt(f[0], 10), reps = parseInt(f[1], 10);
       if (p >= 1 && p <= NUM_PATTERNS && reps >= 1) slots.push({ pat: p, reps, mute: parseInt(f[2], 16) & MUTE_MASK });

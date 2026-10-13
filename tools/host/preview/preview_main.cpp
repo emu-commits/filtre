@@ -56,14 +56,14 @@ int main() {
     g_decks[0].mode = DECK_CHOP; g_decks[0].lastSlice = 3;
     Pattern& p = g_patterns[0];
     const uint8_t phrase[16] = {1,0,0,3, 0,5,0,0, 2,0,16,0, 7,0,10,0};
-    for (int i = 0; i < 16; i++) { p.chop[0][i] = phrase[i] | (i % 8 == 0 ? CHOP_ACC : 0); p.lock[i] = (uint8_t)(i * 16); p.lockSet |= 1u << i; }
+    for (int i = 0; i < 16; i++) { patSetChop(p, 0, (uint8_t)i, phrase[i] | (i % 8 == 0 ? CHOP_ACC : 0)); patSetLock(p, (uint8_t)i, (uint8_t)(i * 16)); }
     writeBass(0, BASS_OCTAVE);
-    p.synth[2][0].setMono(10, 3, false, false); p.synth[2][0].add(1, 4); p.synth[2][0].add(5, 4);
+    { SynthCell c; c.setMono(10, 3, false, false); c.add(1, 4); c.add(5, 4); patSetCell(p, 2, 0, c); }
     g_songMode = false; g_recEnabled = true; g_curTrack = TRK_DECK_A; g_curStep = 5;
     sequencerStart(true); run(30000);
     g_curPage = PAGE_PATTERN; shot("01_pattern_deck");
 
-    setPatternLength(0, NUM_STEPS); g_curStep = 21; g_curTrack = TRK_DRUMS; g_curDrumLane = 2;
+    setPatternLength(0, 2 * STEPS_PER_BAR); g_curStep = 21; g_curTrack = TRK_DRUMS; g_curDrumLane = 2;
     uiStatus("PASTE P1>P3: You sure?"); shot("02_pattern_bar2_status");
     g_fakeMs += 5000;
     g_holdProg = 0.6f; strcpy(g_holdLabel, "WRITE BASS"); shot("03_pattern_hold"); g_holdProg = 0;
@@ -87,7 +87,8 @@ int main() {
     g_curPage = PAGE_SONG; g_songMode = true; g_songCursor = 2;
     g_song[4] = { 7, 16, MUTE_MASK, 0 }; g_song[5] = { 3, 8, MUTE_SYNTH(0) | MUTE_DECK(1) | MUTE_LANE(5), 254 };
     for (int i = 6; i < 40; i++) g_song[i] = { (uint8_t)(i % 8), (uint8_t)(1 + i % 5), (uint16_t)(i % 3 ? 0 : MUTE_LANE(0)), (uint8_t)(i % 4 ? i * 6 : TARGET_NONE) };
-    shot("12_song"); g_songCursor = 4; shot("13_song_slot_full");
+    g_song[8] = { 11, 3, MUTE_LANE(0), 0 }; g_song[9] = { 31, 16, 0, TARGET_NONE }; g_songTag = 8; g_songMode = false;
+    shot("12_song"); g_songMode = true; g_songCursor = 4; shot("13_song_slot_full");
     { File f = SD.open("/groovebox/songs/Around-A-Very-Long-Reference-Track-Name.arr", FILE_WRITE); f.write((const uint8_t*)"x", 1); f.close(); }
     g_arrList = true; uiScanSongDir(); g_fileSel = 0; shot("13b_song_arrangements"); g_arrList = false;
 

@@ -18,9 +18,9 @@
 #include "styles.h"
 #include "wavetable.h"
 #include "audio_engine.h"
+#include "logo.h"
 #include <math.h>
 
-Page    g_curPage    = PAGE_PATTERN;
 bool    g_needRedraw = true;
 uint8_t g_soundParam = 0;
 float   g_holdProg   = 0.0f;
@@ -162,7 +162,8 @@ void uiDeckRowValue(uint8_t di, uint8_t row, char* o, size_t n) {
         case DR_KEY:      snprintf(o, n, "%s", g_keyNames[g_fx.key % 12]); break;
         case DR_BASSMODE: snprintf(o, n, "%s", g_bassModeNames[g_fx.bassMode % BASS_COUNT]); break;
         case DR_STYLE:    snprintf(o, n, "%s", g_styleNames[g_fx.style % STYLE_COUNT]); break;
-        case DR_PATLEN:   snprintf(o, n, "%s", patLen(g_patterns[g_curPattern]) == NUM_STEPS ? "2 BARS" : "1 BAR"); break;
+        case DR_PATLEN:   { int bars = patLen(g_patterns[g_curPattern]) / STEPS_PER_BAR;
+                            snprintf(o, n, "%d BAR%s", bars, bars > 1 ? "S" : ""); break; }
         case DR_SLICEPOS: if (has) snprintf(o, n, "#%u %.3fs", k.lastSlice + 1, (float)k.slice[k.lastSlice] / SAMPLE_RATE);
                           else snprintf(o, n, "-"); break;
         case DR_IN:       snprintf(o, n, "%d%%", has ? (int)(k.in * 100.0f / len) : 0); break;
@@ -258,7 +259,7 @@ static void drawHeader() {
     uint8_t len = patLen(g_patterns[g_curPattern]);
     if (g_playing && !g_songMode && g_nextPattern != g_curPattern)   // a switch is queued
                           canvas.printf("PT%u>%u", g_curPattern + 1, g_nextPattern + 1);
-    else if (len == NUM_STEPS) canvas.printf("PT%u.%u", g_curPattern + 1, g_curStep / STEPS_PER_BAR + 1);
+    else if (len > STEPS_PER_BAR) canvas.printf("PT%u.%u", g_curPattern + 1, g_curStep / STEPS_PER_BAR + 1);
     else                  canvas.printf("PT%u", g_curPattern + 1);
     if (g_songMode) { canvas.setTextColor(COL_ACCENT); canvas.setCursor(112, 2); canvas.print("SNG"); }
 
@@ -323,7 +324,7 @@ static void drawPatternPage() {
     uint8_t len  = patLen(p);
     uint8_t base = (uint8_t)((g_curStep / STEPS_PER_BAR) * STEPS_PER_BAR);   // bar on screen
     bool here = g_playing && g_playPattern == g_curPattern;
-    const uint16_t mu = seqMuteMask();
+    const uint16_t mu = seqEditMask();
     int y = 13;
 
     // 3 synth rows (11 px pitch)
@@ -334,7 +335,7 @@ static void drawPatternPage() {
 
         for (int i = 0; i < STEPS_PER_BAR; i++) {
             int st = base + i, x = gx + i * gw;
-            const SynthCell& c = p.synth[t][st];
+            const SynthCell c = patCell(p, (uint8_t)t, (uint8_t)st);
             uint8_t bg = COL_BG;
             if (here && st == g_lastStep) bg = COL_PLAYBG;
             if (c.accent && !c.empty()) bg = COL_ACCBG;
@@ -384,7 +385,7 @@ static void drawPatternPage() {
         } else {
             for (int i = 0; i < STEPS_PER_BAR; i++) {
                 int st = base + i, x = gx + i * gw;
-                uint8_t c = p.chop[d][st];
+                uint8_t c = patChop(p, (uint8_t)d, (uint8_t)st);
                 uint8_t bg = (here && st == g_lastStep) ? COL_PLAYBG : COL_BG;
                 if (CHOP_SLICE(c) && (c & CHOP_ACC)) bg = COL_ACCBG;
                 canvas.fillRect(x, y, gw - 1, 8, bg);
@@ -404,16 +405,16 @@ static void drawPatternPage() {
     // cutoff lock lane: amber where a sweep is recorded, taller = more open
     for (int i = 0; i < STEPS_PER_BAR; i++) {
         int st = base + i;
-        if (p.lockSet & (1u << st)) {
-            int h = 1 + p.lock[st] / 86;
+        if (patLocked(p, (uint8_t)st)) {
+            int h = 1 + patLock(p, (uint8_t)st) / 86;
             canvas.fillRect(gx + i * gw + 1, y + 3 - h, gw - 3, h, COL_AMBER);
         }
     }
     y += 4;
 
-    // 8 drum lanes, TR-style: lane 8 on top, kick (lane 1) at the bottom
+    // 8 drum lanes, lane 1 on top, lane 8 at the bottom (the mute keys' order)
     for (int row = 0; row < NUM_DRUM_LANES; row++) {
-        int l = NUM_DRUM_LANES - 1 - row;             // visual row -> lane
+        int l = row;                                    // visual row = lane
         bool sel = (g_curTrack == TRK_DRUMS && g_curDrumLane == l);
         const bool lmute = mu & MUTE_LANE(l);
         // 7 px rows: number every other lane, and always the selected one
@@ -425,8 +426,8 @@ static void drawPatternPage() {
 
         for (int i = 0; i < STEPS_PER_BAR; i++) {
             int st = base + i, x = gx + i * gw;
-            bool hit = p.drums[st] & (1 << l);
-            bool acc = p.drumAcc[st] & (1 << l);
+            bool hit = patDrums(p, (uint8_t)st) & (1 << l);
+            bool acc = patDrumAcc(p, (uint8_t)st) & (1 << l);
             uint8_t col = hit ? (lmute ? COL_DIM : (acc ? COL_ACCENT : COL_DRUMS)) : COL_GRID;
             if (here && st == g_lastStep && hit) col = COL_TEXT;
             canvas.fillRect(x + 3, y + 1, gw - 7, 4, col);
@@ -681,11 +682,12 @@ static void drawSamplePage() {
 static void drawSongPage() {
     canvas.setTextColor(COL_TEXT);
     canvas.setCursor(2, 14);
-    canvas.printf("SONG %s", g_songMode ? "[ON]" : "[off]");
+    canvas.print(g_songMode ? "SONG" : "SONG(PT)");
     canvas.setTextColor(COL_DIM);
-    canvas.setCursor(120, 14);
+    canvas.setCursor(98, 14);
     canvas.printf("PROJECT P%u %s", g_curProject + 1,
                   storageProjectExists(g_curProject) ? "*" : "");
+    logoDraw(canvas, SCREEN_W - logoWidth(8) - 2, 13, 8, COL_ACCENT);
 
     if (g_arrList) {                              // arrangements on the card
         canvas.setCursor(2, 28); canvas.setTextColor(COL_AMBER); canvas.print("LOAD ARRANGEMENT");
@@ -722,17 +724,19 @@ static void drawSongPage() {
             canvas.setTextColor(isPlay ? COL_TEXT : COL_SYNTH1);
             canvas.setCursor(x + 1, y + 2);
             canvas.printf("%u", sl.pattern + 1);
+            const bool two = sl.pattern >= 9;             // two digits leave no room beside them
             if (sl.repeats > 1) {
                 canvas.setTextColor(COL_DIM);
-                canvas.setCursor(x + 7, y + 2);
+                canvas.setCursor(two ? x + 1 : x + 7, two ? y + 10 : y + 2);
                 canvas.print(sliceChar[(sl.repeats - 1) & 15]);
             }
+            if (i == g_songTag) canvas.fillRect(x + cw - 5, y + 1, 3, 3, COL_ACCENT);
             // filter target: amber column, taller = more open
             if (sl.target != TARGET_NONE) {
                 int h = 1 + sl.target * 5 / 254;
                 canvas.fillRect(x + 1, y + ch - 3 - h, cw - 3, h, COL_AMBER);
             }
-            if (sl.mute) canvas.drawFastHLine(x + 1, y + 11, cw - 3, COL_REC);
+            if (sl.mute) canvas.drawFastHLine(x + 1, (sl.pattern >= 9 && sl.repeats > 1) ? y + 9 : y + 11, cw - 3, COL_REC);
         }
         if (isCursor) canvas.drawRect(x - 1, y - 1, cw + 1, ch, COL_CURSOR);
     }
@@ -783,20 +787,28 @@ void uiDrawNow() {
     g_needRedraw = false;
 }
 
+// letters set wide apart, the way a front panel is engraved
+static void printSpaced(int x, int y, const char* t, int pitch) {
+    for (; *t; t++, x += pitch) { canvas.setCursor(x, y); canvas.print(*t); }
+}
+
 void uiSplash() {
     canvas.fillSprite(COL_BG);
-    canvas.setTextSize(3);
-    canvas.setTextColor(COL_AMBER);  canvas.setCursor(15, 12); canvas.print("FILTRE");
+    const int sc = 36;                                   // 2.25 px per logo unit: 45 px tall
+    const int lx = (SCREEN_W - logoWidth(sc)) / 2;
+    logoDraw(canvas, lx, 14, sc, COL_ACCENT);
+    static const uint8_t stripes[4] = { COL_ACCENT, COL_HOT, COL_REC, COL_ACCBG };
+    logoStripes(canvas, lx, 66, logoWidth(sc), 4, stripes);
+
     canvas.setTextSize(1);
+    canvas.setTextColor(COL_TEXT);
+    printSpaced(lx + 1, 88, "FRENCH TOUCH SAMPLER", 9);
     canvas.setTextColor(COL_DIM);
-    canvas.setCursor(15, 44);  canvas.print("French-touch sampler");
-    canvas.setCursor(15, 60);  canvas.print("2 decks: chop or loop / filter");
-    canvas.setCursor(15, 72);  canvas.print("pump / 909 / 303 / song bounce");
-    canvas.setCursor(15, 88);
-    canvas.printf("heap %uK arena %uK lid %s", (unsigned)(ESP.getFreeHeap() / 1024),
-                  (unsigned)(g_arenaCap / 1024), g_lidOk ? "OK" : "OFF");
-    canvas.setCursor(15, 100); canvas.print("built on Microgroove (lebiro.studio)");
+    canvas.setCursor(lx + 1, 101);
+    canvas.printf("%u PATTERNS / %u BARS / %uK SAMPLES", NUM_PATTERNS, MAX_BARS, (unsigned)(g_arenaCap / 1024));
+    canvas.setCursor(lx + 1, 111);
+    canvas.printf("built on Microgroove    heap %uK", (unsigned)(ESP.getFreeHeap() / 1024));
     canvas.setTextColor(COL_ACCENT);
-    canvas.setCursor(15, 118); canvas.print("Press any key...");
+    printSpaced(lx + 1, 124, "PRESS ANY KEY", 9);
     canvas.pushSprite(0, 0);
 }

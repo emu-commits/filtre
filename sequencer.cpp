@@ -7,9 +7,14 @@
 #include <string.h>
 
 Pattern    g_patterns[NUM_PATTERNS];
+PatBar     g_bars[NUM_BARS];
+const PatBar g_noBar = {};
+volatile bool g_patFull = false;
 SongSlot   g_song[SONG_LENGTH];
 uint8_t    g_songLoopStart = 0;
 uint8_t    g_songCursor = 0;       // the slot the SONG page edits; stopped, the one whose mutes apply
+Page       g_curPage    = PAGE_PATTERN;   // the page on screen (the mute keys read it)
+int8_t     g_songTag    = -1;             // SONG page: the slot tagged by CPY, -1 = none yet
 
 SynthTrack g_synths[NUM_SYNTHS];
 DrumLane   g_drumLanes[NUM_DRUM_LANES];
@@ -78,13 +83,129 @@ static void post(uint8_t type, uint8_t a, uint8_t b, uint8_t c) {
     s_evHead = next;
 }
 
+// ---------- pattern memory ----------
+// Bars are taken by the keys (core 1) and by live record (the audio task), so
+// the pool's bookkeeping sits in a short critical section. Step data itself is
+// plain bytes: a torn read costs one wrong step once, as it always did.
+static uint8_t s_barUsed[NUM_BARS];
+#ifdef ARDUINO
+static portMUX_TYPE s_barMux = portMUX_INITIALIZER_UNLOCKED;
+#define BAR_LOCK()   portENTER_CRITICAL(&s_barMux)
+#define BAR_UNLOCK() portEXIT_CRITICAL(&s_barMux)
+#else
+#define BAR_LOCK()
+#define BAR_UNLOCK()
+#endif
+
+// the bar a step lives in, taken from the pool if the pattern has none there yet
+static PatBar* barForWrite(Pattern& p, uint8_t st) {
+    uint8_t& h = p.bar[(st / STEPS_PER_BAR) % MAX_BARS];
+    if (h) return &g_bars[h - 1];
+    PatBar* got = nullptr;
+    BAR_LOCK();
+    if (h) got = &g_bars[h - 1];                  // the other thread took it meanwhile
+    else for (int i = 0; i < NUM_BARS; i++)
+        if (!s_barUsed[i]) {
+            s_barUsed[i] = 1;
+            memset(&g_bars[i], 0, sizeof(PatBar));
+            h = (uint8_t)(i + 1);
+            got = &g_bars[i];
+            break;
+        }
+    BAR_UNLOCK();
+    if (!got) g_patFull = true;
+    return got;
+}
+
+static void barFree(Pattern& p, uint8_t b) {
+    BAR_LOCK();
+    uint8_t h = p.bar[b];
+    p.bar[b] = 0;
+    if (h) s_barUsed[h - 1] = 0;
+    BAR_UNLOCK();
+}
+
+// a bar with nothing left in it goes back to the pool
+static void barTrim(Pattern& p, uint8_t st) {
+    uint8_t b = (uint8_t)((st / STEPS_PER_BAR) % MAX_BARS);
+    if (p.bar[b] && memcmp(&g_bars[p.bar[b] - 1], &g_noBar, sizeof(PatBar)) == 0) barFree(p, b);
+}
+
+uint8_t patBarsFree() {
+    uint8_t n = 0;
+    for (int i = 0; i < NUM_BARS; i++) if (!s_barUsed[i]) n++;
+    return n;
+}
+
+bool patAnyLock(const Pattern& p) {
+    for (int b = 0; b < patLen(p) / STEPS_PER_BAR; b++)
+        if (p.bar[b] && g_bars[p.bar[b] - 1].lockSet) return true;
+    return false;
+}
+
+bool patSetCell(Pattern& p, uint8_t track, uint8_t st, const SynthCell& c) {
+    uint32_t v = 0;
+    if (!c.empty()) {
+        for (int i = MAX_POLY - 1; i >= 0; i--) {
+            uint8_t n = c.note[i] > 12 ? 0 : c.note[i], o = c.oct[i] > 7 ? 7 : c.oct[i];
+            v = (v << 7) | (n ? (uint32_t)(n | (o << 4)) : 0);
+        }
+        v |= (c.accent ? 1u << 21 : 0) | (c.slide ? 1u << 22 : 0);
+    }
+    if (!v && !p.bar[(st / STEPS_PER_BAR) % MAX_BARS]) return true;
+    PatBar* b = barForWrite(p, st);
+    if (!b) return false;
+    uint8_t* o = b->cell[track][st % STEPS_PER_BAR];
+    o[0] = (uint8_t)v; o[1] = (uint8_t)(v >> 8); o[2] = (uint8_t)(v >> 16);
+    return true;
+}
+
+bool patSetDrums(Pattern& p, uint8_t st, uint8_t hits, uint8_t acc) {
+    acc &= hits;
+    if (!hits && !p.bar[(st / STEPS_PER_BAR) % MAX_BARS]) return true;
+    PatBar* b = barForWrite(p, st);
+    if (!b) return false;
+    b->drums[st % STEPS_PER_BAR] = hits; b->drumAcc[st % STEPS_PER_BAR] = acc;
+    return true;
+}
+
+bool patSetChop(Pattern& p, uint8_t d, uint8_t st, uint8_t v) {
+    if (!v && !p.bar[(st / STEPS_PER_BAR) % MAX_BARS]) return true;
+    PatBar* b = barForWrite(p, st);
+    if (!b) return false;
+    b->chop[d][st % STEPS_PER_BAR] = v;
+    return true;
+}
+
+bool patSetLock(Pattern& p, uint8_t st, uint8_t v) {
+    PatBar* b = barForWrite(p, st);
+    if (!b) return false;
+    b->lock[st % STEPS_PER_BAR] = v;
+    b->lockSet |= (uint16_t)(1u << (st % STEPS_PER_BAR));
+    return true;
+}
+
+void patClearLock(Pattern& p, uint8_t st) {
+    uint8_t h = p.bar[(st / STEPS_PER_BAR) % MAX_BARS];
+    if (!h) return;
+    g_bars[h - 1].lock[st % STEPS_PER_BAR] = 0;
+    g_bars[h - 1].lockSet &= (uint16_t)~(1u << (st % STEPS_PER_BAR));
+}
+
+bool patEqual(const Pattern& a, const Pattern& b) {
+    if (patLen(a) != patLen(b) || a.mute != b.mute) return false;
+    for (int i = 0; i < patLen(a) / STEPS_PER_BAR; i++)
+        if (memcmp(&patBar(a, (uint8_t)(i * STEPS_PER_BAR)), &patBar(b, (uint8_t)(i * STEPS_PER_BAR)), sizeof(PatBar))) return false;
+    return true;
+}
+
 // ---------- init ----------
 void clearPattern(uint8_t idx) {
     if (idx >= NUM_PATTERNS) return;
     Pattern& p = g_patterns[idx];
-    uint8_t len = patLen(p);
-    memset(&p, 0, sizeof(p));
-    p.length = len;
+    for (int b = 0; b < MAX_BARS; b++) barFree(p, (uint8_t)b);
+    p.length = patLen(p);
+    p.mute = 0;
 }
 
 void songClearSlot(uint8_t i) {
@@ -93,7 +214,8 @@ void songClearSlot(uint8_t i) {
 }
 
 void sequencerInit() {
-    memset(g_patterns, 0, sizeof(g_patterns));
+    memset((void*)g_patterns, 0, sizeof(g_patterns));
+    memset(s_barUsed, 0, sizeof(s_barUsed));
     for (int p = 0; p < NUM_PATTERNS; p++) g_patterns[p].length = STEPS_PER_BAR;
     for (int i = 0; i < SONG_LENGTH; i++) songClearSlot(i);
 
@@ -126,10 +248,11 @@ void sequencerInit() {
 // one on screen). Song mode on: the slot does, and the pattern's are ignored.
 // Nothing is ever copied between the two, so each comes back as it was left.
 static int muteSlot() {
-    uint8_t i = g_playing ? (uint8_t)g_songPos : g_songCursor;
+    uint8_t i = (g_songMode && g_playing) ? (uint8_t)g_songPos : g_songCursor;
     return (i < SONG_LENGTH && g_song[i].pattern != SONG_EMPTY) ? i : -1;
 }
 
+// What you hear: song mode (the N key) decides, whatever page you are on.
 uint16_t seqMuteMask() {
     if (g_songMode) {
         if (g_playing) return g_slotMute;
@@ -139,13 +262,24 @@ uint16_t seqMuteMask() {
     return g_patterns[g_playing ? g_playPattern : g_curPattern].mute;
 }
 
+// What the mute keys edit and the screens show. The SONG page always works on
+// song slots (the playing one in song mode, else the one under the cursor);
+// every other page follows song mode.
+static bool editsSlot() { return g_curPage == PAGE_SONG || g_songMode; }
+
+uint16_t seqEditMask() {
+    if (!editsSlot()) return seqMuteMask();
+    int i = muteSlot();
+    return i >= 0 ? g_song[i].mute : 0;
+}
+
 int seqToggleMute(uint8_t row, uint8_t* pat, bool* nowMuted) {
     uint16_t bit = (uint16_t)(1u << row);
-    if (g_songMode) {
+    if (editsSlot()) {
         int i = muteSlot();
         if (i < 0) return -1;
         g_song[i].mute ^= bit;
-        if (g_playing) g_slotMute = g_song[i].mute;
+        if (g_songMode && g_playing) g_slotMute = g_song[i].mute;
         *nowMuted = g_song[i].mute & bit;
         return i + 1;
     }
@@ -208,15 +342,12 @@ static bool songAdvance() {
 }
 
 // ---------- the step ----------
-static void cutoffSegment(const Pattern& p, uint8_t step, uint8_t len, float dur) {
+static void cutoffSegment(Pattern& p, uint8_t step, uint8_t len, float dur) {
     float base = (float)g_fx.cutoff;
     float a, b;
     const SongSlot& sl = g_song[g_songPos];
     if (s_touch) {                                // hands on the filter win
-        if (g_recEnabled && g_cutHeld) {
-            g_patterns[g_playPattern].lock[step] = g_fx.cutoff;
-            g_patterns[g_playPattern].lockSet |= (1u << step);
-        }
+        if (g_recEnabled && g_cutHeld) patSetLock(p, step, g_fx.cutoff);
         if (!g_cutHeld && (g_recEnabled || step == len - 1)) s_touch = false;
         s_cutLeft = 0;
         return;
@@ -227,10 +358,10 @@ static void cutoffSegment(const Pattern& p, uint8_t step, uint8_t len, float dur
         a = s_slotFrom + (to - s_slotFrom) * ((float)s_slotStep / total);
         b = s_slotFrom + (to - s_slotFrom) * ((float)(s_slotStep + 1) / total);
         if (b > 255.0f) b = 255.0f; if (b < 0.0f) b = 0.0f;
-    } else if (p.lockSet) {
+    } else if (patAnyLock(p)) {
         uint8_t nx = (uint8_t)((step + 1) % len);
-        a = (p.lockSet & (1u << step)) ? (float)p.lock[step] : base;
-        b = (p.lockSet & (1u << nx))   ? (float)p.lock[nx]   : base;
+        a = patLocked(p, step) ? (float)patLock(p, step) : base;
+        b = patLocked(p, nx)   ? (float)patLock(p, nx)   : base;
     } else {
         a = b = base;
         dur = 64.0f;
@@ -294,7 +425,7 @@ void seqFireStep() {
     const uint16_t mute = seqMuteMask();
     for (int s = 0; s < NUM_SYNTHS; s++) {
         if ((mute & MUTE_SYNTH(s)) || (s_supSynth & (1 << s))) continue;
-        const SynthCell& c = p.synth[s][step];
+        const SynthCell c = patCell(p, (uint8_t)s, step);
         bool mono = (g_synths[s].voices <= 1);
         for (int i = 0; i < (mono ? 1 : MAX_POLY); i++)
             if (c.note[i] != NOTE_EMPTY)
@@ -303,13 +434,14 @@ void seqFireStep() {
     }
 
     // --- drums; lane 1 also drives the pump, muted or not when GHOST is on ---
-    uint8_t mask = p.drums[step] & (uint8_t)~s_supDrums;
+    const uint8_t accs = patDrumAcc(p, step);
+    uint8_t mask = patDrums(p, step) & (uint8_t)~s_supDrums;
     if (mask & 1) {
-        if (!(mute & MUTE_LANE(0))) triggerLane(0, p.drumAcc[step] & 1);
+        if (!(mute & MUTE_LANE(0))) triggerLane(0, accs & 1);
         else if (g_fx.ghost) pumpTrigger();
     }
     for (int l = 1; l < NUM_DRUM_LANES; l++)
-        if ((mask & (1 << l)) && !(mute & MUTE_LANE(l))) triggerLane(l, p.drumAcc[step] & (1 << l));
+        if ((mask & (1 << l)) && !(mute & MUTE_LANE(l))) triggerLane(l, accs & (1 << l));
 
     // --- decks ---
     for (int d = 0; d < NUM_DECKS; d++) {
@@ -323,7 +455,7 @@ void seqFireStep() {
             }
         } else {
             s_loopRun[d] = false;
-            uint8_t c = p.chop[d][step];
+            uint8_t c = patChop(p, (uint8_t)d, step);
             if (CHOP_SLICE(c) && !(s_supDeck & (1 << d)))
                 deckNoteOn(d, (uint8_t)(CHOP_SLICE(c) - 1), c & CHOP_ACC, c & CHOP_REV);
         }
@@ -401,9 +533,10 @@ void seqDrainEvents() {
                 bool legato = e.c & EVF_LEGATO, accent = e.c & EVF_ACCENT;
                 g_synths[track].noteOn(noteToFreq(note, oct), accent, !poly && legato);
                 if (rec) {
-                    SynthCell& c = p.synth[track][st];
+                    SynthCell c = patCell(p, track, st);
                     if (poly && legato && !c.empty()) { c.add(note, oct); if (accent) c.accent = true; }
                     else c.setMono(note, oct, accent, !poly && legato);
+                    patSetCell(p, track, st, c);
                     if (upcoming) s_supSynth |= (1 << track);
                 }
                 break;
@@ -416,8 +549,8 @@ void seqDrainEvents() {
             case EV_DRUM:
                 triggerLane(e.a, e.c & EVF_ACCENT);
                 if (rec && e.a < NUM_DRUM_LANES) {
-                    p.drums[st] |= (1 << e.a);
-                    if (e.c & EVF_ACCENT) p.drumAcc[st] |= (1 << e.a); else p.drumAcc[st] &= ~(1 << e.a);
+                    uint8_t bit = (uint8_t)(1 << e.a), acc = patDrumAcc(p, st);
+                    patSetDrums(p, st, patDrums(p, st) | bit, (e.c & EVF_ACCENT) ? acc | bit : acc & (uint8_t)~bit);
                     if (upcoming) s_supDrums |= (1 << e.a);
                 }
                 break;
@@ -425,7 +558,7 @@ void seqDrainEvents() {
                 if (e.a >= NUM_DECKS) break;
                 deckNoteOn(e.a, e.b, e.c & EVF_ACCENT, false);
                 if (rec) {
-                    p.chop[e.a][st] = (uint8_t)((e.b + 1) | ((e.c & EVF_ACCENT) ? CHOP_ACC : 0));
+                    patSetChop(p, e.a, st, (uint8_t)((e.b + 1) | ((e.c & EVF_ACCENT) ? CHOP_ACC : 0)));
                     if (upcoming) s_supDeck |= (1 << e.a);
                 }
                 break;
@@ -452,11 +585,13 @@ void liveSynthNote(uint8_t track, uint8_t note, uint8_t octave, bool accent, boo
         uint8_t len = patLen(p);
         bool stacked = false;
         if (poly && legato) {
-            SynthCell& c = p.synth[track][(uint8_t)((g_curStep + len - 1) % len)];
-            if (!c.empty()) { c.add(note, octave); if (accent) c.accent = true; stacked = true; }
+            uint8_t prev = (uint8_t)((g_curStep + len - 1) % len);
+            SynthCell c = patCell(p, track, prev);
+            if (!c.empty()) { c.add(note, octave); if (accent) c.accent = true; patSetCell(p, track, prev, c); stacked = true; }
         }
         if (!stacked) {
-            p.synth[track][g_curStep].setMono(note, octave, accent, false);
+            SynthCell c; c.setMono(note, octave, accent, false);
+            patSetCell(p, track, g_curStep, c);
             g_curStep = (uint8_t)((g_curStep + 1) % len);
         }
         g_needRedraw = true;
@@ -471,8 +606,8 @@ void liveDrumHit(uint8_t lane, bool accent) {
     uint8_t flags = accent ? EVF_ACCENT : 0;
     if (g_recEnabled && !g_playing) {
         Pattern& p = g_patterns[g_curPattern];
-        p.drums[g_curStep] |= (1 << lane);
-        if (accent) p.drumAcc[g_curStep] |= (1 << lane); else p.drumAcc[g_curStep] &= ~(1 << lane);
+        uint8_t bit = (uint8_t)(1 << lane), acc = patDrumAcc(p, g_curStep);
+        patSetDrums(p, g_curStep, patDrums(p, g_curStep) | bit, accent ? acc | bit : acc & (uint8_t)~bit);
         g_curStep = (uint8_t)((g_curStep + 1) % patLen(p));
         g_needRedraw = true;
     } else if (g_recEnabled) {
@@ -486,7 +621,7 @@ void liveDeckHit(uint8_t deck, uint8_t slice, bool accent) {
     uint8_t flags = accent ? EVF_ACCENT : 0;
     if (g_recEnabled && !g_playing) {
         Pattern& p = g_patterns[g_curPattern];
-        p.chop[deck][g_curStep] = (uint8_t)((slice + 1) | (accent ? CHOP_ACC : 0));
+        patSetChop(p, deck, g_curStep, (uint8_t)((slice + 1) | (accent ? CHOP_ACC : 0)));
         g_curStep = (uint8_t)((g_curStep + 1) % patLen(p));
         g_needRedraw = true;
     } else if (g_recEnabled) {
@@ -503,17 +638,23 @@ void triggerLaneLive(uint8_t lane)   { post(EV_DRUM, lane, 0, 0); }
 
 void touchCutoff() {
     s_touch = true;
-    if (g_recEnabled && g_playing) {
-        Pattern& p = g_patterns[g_playPattern];
-        p.lock[g_lastStep] = g_fx.cutoff;
-        p.lockSet |= (1u << g_lastStep);
-    }
+    if (g_recEnabled && g_playing)
+        patSetLock(g_patterns[g_playPattern], g_lastStep, g_fx.cutoff);
+
 }
 
 // ---------- pattern helpers ----------
 void pastePattern(uint8_t src, uint8_t dst) {
     if (src >= NUM_PATTERNS || dst >= NUM_PATTERNS || src == dst) return;
-    g_patterns[dst] = g_patterns[src];
+    const Pattern& a = g_patterns[src];
+    Pattern& b = g_patterns[dst];
+    for (int i = 0; i < MAX_BARS; i++) {
+        if (!a.bar[i]) { barFree(b, (uint8_t)i); continue; }
+        PatBar* to = barForWrite(b, (uint8_t)(i * STEPS_PER_BAR));
+        if (to) memcpy(to, &g_bars[a.bar[i] - 1], sizeof(PatBar));     // pool full: that bar stays as it was
+    }
+    b.length = patLen(a);
+    b.mute = a.mute;
     if (dst == g_curPattern && g_curStep >= patLen(g_patterns[dst])) g_curStep = 0;
 }
 
@@ -538,39 +679,43 @@ bool seqFollowPattern() {
 void setPatternLength(uint8_t idx, uint8_t len) {
     if (idx >= NUM_PATTERNS) return;
     Pattern& p = g_patterns[idx];
-    if (len == NUM_STEPS && patLen(p) == STEPS_PER_BAR) {
-        // growing: bar 2 starts as a copy of bar 1, so nothing drops out
-        for (int st = 0; st < STEPS_PER_BAR; st++) {
-            int o = st + STEPS_PER_BAR;
-            for (int s = 0; s < NUM_SYNTHS; s++) p.synth[s][o] = p.synth[s][st];
-            p.drums[o] = p.drums[st]; p.drumAcc[o] = p.drumAcc[st];
-            for (int d = 0; d < NUM_DECKS; d++) p.chop[d][o] = p.chop[d][st];
-            p.lock[o] = p.lock[st];
-            if (p.lockSet & (1u << st)) p.lockSet |= (1u << o); else p.lockSet &= ~(1u << o);
-        }
+    int had = patLen(p) / STEPS_PER_BAR;
+    int want = constrain((int)len / STEPS_PER_BAR, 1, MAX_BARS);
+    // growing: the new bars repeat the ones already there, so nothing drops out
+    for (int b = had; b < want; b++) {
+        uint8_t from = p.bar[b % had];
+        if (!from) { barFree(p, (uint8_t)b); continue; }
+        PatBar* to = barForWrite(p, (uint8_t)(b * STEPS_PER_BAR));
+        if (to) memcpy(to, &g_bars[from - 1], sizeof(PatBar));
     }
-    p.length = (len == NUM_STEPS) ? NUM_STEPS : STEPS_PER_BAR;
+    p.length = (uint8_t)(want * STEPS_PER_BAR);
+    for (int b = want; b < MAX_BARS; b++) barFree(p, (uint8_t)b);       // shrinking gives the memory back
     if (idx == g_curPattern && g_curStep >= patLen(p)) g_curStep = 0;
 }
 
 // ---------- step editing ----------
 void toggleDrumAtCursor(uint8_t lane) {
-    g_patterns[g_curPattern].drums[g_curStep] ^= (1 << lane);
+    Pattern& p = g_patterns[g_curPattern];
+    uint8_t hits = patDrums(p, g_curStep) ^ (uint8_t)(1 << lane);
+    patSetDrums(p, g_curStep, hits, patDrumAcc(p, g_curStep));
+    if (!hits) barTrim(p, g_curStep);
     g_needRedraw = true;
 }
 
 void writeSynthAtCursor(uint8_t note, uint8_t octave, bool accent) {
     if (g_curTrack >= NUM_SYNTHS) return;
     Pattern& p = g_patterns[g_curPattern];
-    p.synth[g_curTrack][g_curStep].setMono(note, octave, accent, false);
+    SynthCell c; c.setMono(note, octave, accent, false);
+    patSetCell(p, g_curTrack, g_curStep, c);
     g_curStep = (uint8_t)((g_curStep + 1) % patLen(p));
     g_needRedraw = true;
 }
 
 static void clearCell(Pattern& p, uint8_t st) {
-    if (g_curTrack < NUM_SYNTHS)      p.synth[g_curTrack][st].clear(g_curOctave);
-    else if (g_curTrack == TRK_DRUMS) { p.drums[st] = 0; p.drumAcc[st] = 0; }
-    else                              { p.chop[trackDeck(g_curTrack)][st] = 0; p.lockSet &= ~(1u << st); }
+    if (g_curTrack < NUM_SYNTHS)      patSetCell(p, g_curTrack, st, SynthCell{});
+    else if (g_curTrack == TRK_DRUMS) patSetDrums(p, st, 0, 0);
+    else                              { patSetChop(p, trackDeck(g_curTrack), st, 0); patClearLock(p, st); }
+    barTrim(p, st);
 }
 
 void clearCellAtCursor() {

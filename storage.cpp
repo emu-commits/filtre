@@ -3,7 +3,8 @@
 // GBX v3 adds decks, FX, 32-step patterns, chop/lock lanes and song
 // slots with repeats, mutes and filter targets. v4 appends the per-pattern
 // mutes (a v3 file is a v4 file without that tail). v5 widens the song
-// slot's mute to the 13 grid rows. v1/v2 still load.
+// slot's mute to the 13 grid rows. v6 stores the patterns as the bars they
+// really use (up to 64 patterns of up to 4 bars). v1..v5 still load.
 // Arrangements (/groovebox/songs/*.arr) are text: see storageLoadArrangement.
 // ============================================================
 #include "storage.h"
@@ -20,10 +21,12 @@
 uint8_t g_curProject = 0;
 
 #define GBX_MAGIC   0x31584247u   // "GBX1"
-#define GBX_VERSION 5
+#define GBX_VERSION 6
 #define OLD_BUILTIN_WT 8           // before v4: user wavetables started here
 #define OLD_STEPS   16            // v1/v2 patterns were one bar
-#define FILE_PATTERNS 8           // patterns inside the fixed ProjectFile; the rest are a tail after it
+#define FILE_PATTERNS 8           // v1..v5: patterns inside the fixed ProjectFile; the rest are a tail after it
+#define OLD_PATTERNS  32          // v4/v5: patterns in a file, tail included
+#define V5_STEPS      32          // v3..v5 patterns were two bars
 
 // ---- serialized structures (POD, packed layout kept stable) ----
 struct __attribute__((packed)) SaveSynth {
@@ -74,11 +77,11 @@ struct __attribute__((packed)) ProjectFileV2 {
 
 // ---------- v3 ----------
 struct __attribute__((packed)) SavePattern {
-    SaveCell cells[NUM_SYNTHS][NUM_STEPS];
-    uint8_t  drums[NUM_STEPS];
-    uint8_t  drumAcc[NUM_STEPS];
-    uint8_t  chop[NUM_DECKS][NUM_STEPS];
-    uint8_t  lock[NUM_STEPS];
+    SaveCell cells[NUM_SYNTHS][V5_STEPS];
+    uint8_t  drums[V5_STEPS];
+    uint8_t  drumAcc[V5_STEPS];
+    uint8_t  chop[NUM_DECKS][V5_STEPS];
+    uint8_t  lock[V5_STEPS];
     uint32_t lockSet;
     uint8_t  length;
 };
@@ -100,57 +103,55 @@ struct __attribute__((packed)) SaveSlot { uint8_t pattern, repeats, mute, target
 #define OLD_SLOT_DECKA 0x10
 #define OLD_SLOT_DECKB 0x20
 #define OLD_SLOT_KICK  0x40
-struct __attribute__((packed)) ProjectFile {
-    uint32_t magic;
-    uint16_t version;
-    uint16_t bpm;
-    uint8_t  songLoopStart;
-    SaveSlot song[SONG_LENGTH];
-    uint8_t  voices[NUM_SYNTHS];
-    SaveSynth    synths[NUM_SYNTHS];
-    SaveDrumLane lanes[NUM_DRUM_LANES];
-    SaveFx       fx;
+// everything in front of the patterns: v3..v5 carry it at the top of ProjectFile, v6 writes it alone
+#define PROJECT_HEAD \
+    uint32_t magic; \
+    uint16_t version; \
+    uint16_t bpm; \
+    uint8_t  songLoopStart; \
+    SaveSlot song[SONG_LENGTH]; \
+    uint8_t  voices[NUM_SYNTHS]; \
+    SaveSynth    synths[NUM_SYNTHS]; \
+    SaveDrumLane lanes[NUM_DRUM_LANES]; \
+    SaveFx       fx; \
     SaveDeck     decks[NUM_DECKS];
+struct __attribute__((packed)) ProjectHead { PROJECT_HEAD };
+struct __attribute__((packed)) ProjectFile {
+    PROJECT_HEAD
     SavePattern  patterns[FILE_PATTERNS];
     uint16_t     mutes[FILE_PATTERNS];     // v4: Pattern.mute
     uint8_t      slotMuteHi[SONG_LENGTH];  // v5: SongSlot.mute, high byte
 };
 #define V3_SIZE offsetof(ProjectFile, mutes)
 #define V4_SIZE offsetof(ProjectFile, slotMuteHi)
-// patterns FILE_PATTERNS..NUM_PATTERNS-1 follow the struct, one {SavePattern, mute} at a time,
-// so older firmware still reads the first 8 and a short file just leaves the rest empty
+// v4/v5: patterns FILE_PATTERNS..31 follow the struct, one {SavePattern, mute} at a time
 struct __attribute__((packed)) TailPattern { SavePattern pat; uint16_t mute; };
 
-static void packPattern(const Pattern& src, SavePattern& o) {
-    for (int s = 0; s < NUM_SYNTHS; s++)
-        for (int st = 0; st < NUM_STEPS; st++) {
-            const SynthCell& c = src.synth[s][st];
-            SaveCell& oc = o.cells[s][st];
-            for (int i = 0; i < MAX_POLY; i++) { oc.note[i] = c.note[i]; oc.oct[i] = c.oct[i]; }
-            oc.flags = (uint8_t)((c.accent ? 1 : 0) | (c.slide ? 2 : 0));
-        }
-    memcpy(o.drums, src.drums, NUM_STEPS);
-    memcpy(o.drumAcc, src.drumAcc, NUM_STEPS);
-    memcpy(o.chop, src.chop, sizeof(o.chop));
-    memcpy(o.lock, src.lock, NUM_STEPS);
-    o.lockSet = src.lockSet;
-    o.length  = patLen(src);
-}
+// ---------- v6 ----------
+// The ProjectFile up to (not including) `patterns`, then slotMuteHi, then:
+//   uint8 count, uint8 barBytes
+//   per pattern: SavePatHead, then one PatBar (as it sits in RAM) per bit set in `bars`
+// Empty patterns cost 4 bytes and an empty project saves in about 2 KB.
+#define V6_HEAD sizeof(ProjectHead)
+static_assert(sizeof(ProjectHead) == offsetof(ProjectFile, patterns), "one head, two spellings");
+struct __attribute__((packed)) SavePatHead { uint8_t length, bars; uint16_t mute; };
+static_assert(sizeof(PatBar) == 226, "PatBar is written to the card as it is: keep its layout");
 
+// a v3..v5 pattern into the pool (the pattern must be clear)
 static void unpackPattern(const SavePattern& in, Pattern& o) {
-    for (int s = 0; s < NUM_SYNTHS; s++)
-        for (int st = 0; st < NUM_STEPS; st++) {
+    setPatternLength((uint8_t)(&o - g_patterns), in.length == V5_STEPS ? V5_STEPS : STEPS_PER_BAR);
+    for (int st = 0; st < patLen(o); st++) {
+        for (int s = 0; s < NUM_SYNTHS; s++) {
             const SaveCell& c = in.cells[s][st];
-            SynthCell& oc = o.synth[s][st];
+            SynthCell oc;
             for (int i = 0; i < MAX_POLY; i++) { oc.note[i] = c.note[i]; oc.oct[i] = c.oct[i]; }
             oc.accent = c.flags & 1; oc.slide = c.flags & 2;
+            patSetCell(o, (uint8_t)s, (uint8_t)st, oc);
         }
-    memcpy(o.drums, in.drums, NUM_STEPS);
-    memcpy(o.drumAcc, in.drumAcc, NUM_STEPS);
-    memcpy(o.chop, in.chop, sizeof(o.chop));
-    memcpy(o.lock, in.lock, NUM_STEPS);
-    o.lockSet = in.lockSet;
-    o.length  = (in.length == NUM_STEPS) ? NUM_STEPS : STEPS_PER_BAR;
+        patSetDrums(o, (uint8_t)st, in.drums[st], in.drumAcc[st]);
+        for (int d = 0; d < NUM_DECKS; d++) patSetChop(o, (uint8_t)d, (uint8_t)st, in.chop[d][st]);
+        if (in.lockSet & (1u << st)) patSetLock(o, (uint8_t)st, in.lock[st]);
+    }
 }
 
 static void slotPath(uint8_t slot, char* out, size_t n) {
@@ -163,8 +164,9 @@ bool storageProjectExists(uint8_t slot) {
 }
 
 bool storageSaveProject(uint8_t slot) {
-    ProjectFile* pf = (ProjectFile*)calloc(1, sizeof(ProjectFile));   // too big for stack or .bss
+    ProjectHead* pf = (ProjectHead*)calloc(1, sizeof(ProjectHead));
     if (!pf) return false;
+    uint8_t hi[SONG_LENGTH];
 
     pf->magic = GBX_MAGIC;
     pf->version = GBX_VERSION;
@@ -173,7 +175,7 @@ bool storageSaveProject(uint8_t slot) {
     for (int i = 0; i < SONG_LENGTH; i++) {
         const SongSlot& sl = g_song[i];
         pf->song[i] = { sl.pattern, sl.repeats, (uint8_t)(sl.mute & 0xFF), sl.target };
-        pf->slotMuteHi[i] = (uint8_t)(sl.mute >> 8);
+        hi[i] = (uint8_t)(sl.mute >> 8);
     }
 
     for (int s = 0; s < NUM_SYNTHS; s++) {
@@ -204,29 +206,25 @@ bool storageSaveProject(uint8_t slot) {
         memcpy(o.slice, k.slice, sizeof(o.slice));
     }
 
-    for (int p = 0; p < FILE_PATTERNS; p++) {
-        packPattern(g_patterns[p], pf->patterns[p]);
-        pf->mutes[p] = g_patterns[p].mute;
-    }
-
     char path[64]; slotPath(slot, path, sizeof(path));
     SD.remove(path);
     File f = SD.open(path, FILE_WRITE);
-    size_t written = 0;
     bool ok = false;
     if (f) {
-        written = f.write((uint8_t*)pf, sizeof(ProjectFile));
-        free(pf); pf = nullptr;                          // the tail is streamed with a much smaller buffer
-        ok = written == sizeof(ProjectFile);
-        TailPattern* tp = ok && NUM_PATTERNS > FILE_PATTERNS ? (TailPattern*)malloc(sizeof(TailPattern)) : nullptr;
-        if (ok && NUM_PATTERNS > FILE_PATTERNS && !tp) ok = false;
-        for (int p = FILE_PATTERNS; ok && p < NUM_PATTERNS; p++) {
-            memset(tp, 0, sizeof(TailPattern));
-            packPattern(g_patterns[p], tp->pat);
-            tp->mute = g_patterns[p].mute;
-            if (f.write((uint8_t*)tp, sizeof(TailPattern)) != sizeof(TailPattern)) ok = false;
+        ok = f.write((uint8_t*)pf, V6_HEAD) == V6_HEAD &&
+             f.write(hi, SONG_LENGTH) == SONG_LENGTH;
+        const uint8_t dims[2] = { NUM_PATTERNS, (uint8_t)sizeof(PatBar) };
+        ok = ok && f.write(dims, 2) == 2;
+        for (int p = 0; ok && p < NUM_PATTERNS; p++) {
+            const Pattern& src = g_patterns[p];
+            SavePatHead h = { patLen(src), 0, src.mute };
+            for (int b = 0; b < patLen(src) / STEPS_PER_BAR; b++)
+                if (src.bar[b] && memcmp(&g_bars[src.bar[b] - 1], &g_noBar, sizeof(PatBar))) h.bars |= (uint8_t)(1 << b);
+            ok = f.write((uint8_t*)&h, sizeof(h)) == sizeof(h);
+            for (int b = 0; ok && b < MAX_BARS; b++)
+                if (h.bars & (1 << b))
+                    ok = f.write((const uint8_t*)&g_bars[src.bar[b] - 1], sizeof(PatBar)) == sizeof(PatBar);
         }
-        free(tp);
         f.close();
     }
     free(pf);
@@ -270,10 +268,6 @@ static void legacyDefaults() {
     for (int d = 0; d < NUM_DECKS; d++) deckUnload(d);
     fxDefaults();
     g_fx.swing = 50;
-    for (int p = 0; p < NUM_PATTERNS; p++) {
-        memset(&g_patterns[p], 0, sizeof(Pattern));
-        g_patterns[p].length = STEPS_PER_BAR;
-    }
 }
 
 static void applyOldSong(const uint8_t* song) {
@@ -326,17 +320,25 @@ bool storageLoadProject(uint8_t slot) {
     size_t need = (version == 1) ? sizeof(ProjectFileV1)
                 : (version == 2) ? sizeof(ProjectFileV2)
                 : (version == 3) ? V3_SIZE
-                : (version == 4) ? V4_SIZE : sizeof(ProjectFile);
-    uint8_t* raw = (uint8_t*)calloc(1, sizeof(ProjectFile) > need ? sizeof(ProjectFile) : need);
+                : (version == 4) ? V4_SIZE
+                : (version == 5) ? sizeof(ProjectFile) : V6_HEAD;
+    // v6 needs the head only; the older layouts carry 8 whole patterns in the struct
+    uint8_t* raw = (uint8_t*)calloc(1, (version >= 3 && version <= 5) ? sizeof(ProjectFile) : need);   // v6: 1 KB, not 7.5
     if (!raw) { f.close(); return false; }
     size_t got = f.read(raw, need);
+    uint8_t hi[SONG_LENGTH];                         // the slots' high mute bytes (v5 on)
+    memset(hi, 0, sizeof(hi));
+    if (got == need && version == 5) memcpy(hi, ((ProjectFile*)raw)->slotMuteHi, SONG_LENGTH);
+    if (got == need && version >= 6)                 // v6 keeps them right after the head
+        got = f.read(hi, SONG_LENGTH) == SONG_LENGTH ? need : 0;
     TailPattern* tail = nullptr;
-    if (got == need && version >= 4 && NUM_PATTERNS > FILE_PATTERNS) tail = (TailPattern*)malloc(sizeof(TailPattern));
+    if (got == need && (version == 4 || version == 5)) tail = (TailPattern*)malloc(sizeof(TailPattern));
     if (got != need) { f.close(); free(raw); return false; }
 
     engineLock();                        // audio parked: nothing fires while the data is swapped
     for (int d = 0; d < NUM_DECKS; d++) deckUnload(d);
     samplerClearAll();
+    for (int p = 0; p < NUM_PATTERNS; p++) { clearPattern((uint8_t)p); setPatternLength((uint8_t)p, STEPS_PER_BAR); }
 
     if (version >= 3) {
         ProjectFile* pf = (ProjectFile*)raw;
@@ -344,7 +346,7 @@ bool storageLoadProject(uint8_t slot) {
         g_songLoopStart = pf->songLoopStart;
         for (int i = 0; i < SONG_LENGTH; i++) {
             const SaveSlot& in = pf->song[i];
-            g_song[i] = { in.pattern, in.repeats, (uint16_t)(in.mute | (pf->slotMuteHi[i] << 8)), in.target, 0 };
+            g_song[i] = { in.pattern, in.repeats, (uint16_t)(in.mute | (hi[i] << 8)), in.target, 0 };
             if (g_song[i].repeats < 1 || g_song[i].repeats > MAX_REPEATS) g_song[i].repeats = 1;
             if (g_song[i].pattern >= NUM_PATTERNS) g_song[i].pattern = SONG_EMPTY;
         }
@@ -360,19 +362,39 @@ bool storageLoadProject(uint8_t slot) {
         g_fx.pump = x.pump; g_fx.bassPump = x.bassPump; g_fx.ghost = x.ghost;
         g_fx.swing = x.swing; g_fx.key = x.key % 12; g_fx.bassMode = x.bassMode; g_fx.style = x.style;
         g_fx.release = x.release;
+        if (version >= 6) {
+            uint8_t dims[2] = { 0, 0 };
+            bool fits = f.read(dims, 2) == 2 && dims[1] == sizeof(PatBar);
+            for (int p = 0; fits && p < dims[0]; p++) {
+                SavePatHead h;
+                if (f.read((uint8_t*)&h, sizeof(h)) != sizeof(h)) break;
+                Pattern scratch; memset((void*)&scratch, 0, sizeof(scratch));
+                Pattern& o = (p < NUM_PATTERNS) ? g_patterns[p] : scratch;      // a file from a bigger build: skip the rest
+                o.length = h.length; o.length = patLen(o);
+                o.mute = (uint16_t)(h.mute & MUTE_MASK);
+                for (int b = 0; fits && b < 8; b++) {
+                    if (!(h.bars & (1 << b))) continue;
+                    PatBar bar;
+                    if (f.read((uint8_t*)&bar, sizeof(bar)) != sizeof(bar)) { fits = false; break; }
+                    if (p >= NUM_PATTERNS || b >= patLen(o) / STEPS_PER_BAR) continue;
+                    // through the pool's own writer: one lock keeps a bar it would otherwise not take
+                    if (!patSetLock(o, (uint8_t)(b * STEPS_PER_BAR), 0)) continue;       // pool full: the bar is lost
+                    g_bars[o.bar[b] - 1] = bar;
+                }
+            }
+        } else {
         for (int p = 0; p < FILE_PATTERNS; p++) {
             Pattern& o = g_patterns[p];
             unpackPattern(pf->patterns[p], o);
             o.mute = (version == 3) ? oldMute : (uint16_t)(pf->mutes[p] & MUTE_MASK);
         }
-        for (int p = FILE_PATTERNS; p < NUM_PATTERNS; p++) {     // the tail, if the file has one
+        for (int p = FILE_PATTERNS; p < OLD_PATTERNS; p++) {     // the tail, if the file has one
             Pattern& o = g_patterns[p];
-            memset(&o, 0, sizeof(Pattern));
-            o.length = STEPS_PER_BAR;
             if (version < 4 || !tail) continue;
             if (f.read((uint8_t*)tail, sizeof(TailPattern)) != sizeof(TailPattern)) { free(tail); tail = nullptr; continue; }
             unpackPattern(tail->pat, o);
             o.mute = (uint16_t)(tail->mute & MUTE_MASK);
+        }
         }
         free(tail); tail = nullptr;
         for (int i = 0; i < SONG_LENGTH; i++) {
@@ -401,11 +423,12 @@ bool storageLoadProject(uint8_t slot) {
             for (int s = 0; s < NUM_SYNTHS; s++)
                 for (int st = 0; st < OLD_STEPS; st++) {
                     const SaveCell& c = pf->cells[p][s][st];
-                    SynthCell& o = g_patterns[p].synth[s][st];
+                    SynthCell o;
                     for (int i = 0; i < MAX_POLY; i++) { o.note[i] = c.note[i]; o.oct[i] = c.oct[i]; }
                     o.accent = c.flags & 1; o.slide = c.flags & 2;
+                    patSetCell(g_patterns[p], (uint8_t)s, (uint8_t)st, o);
                 }
-            memcpy(g_patterns[p].drums, pf->drums[p], OLD_STEPS);
+            for (int st = 0; st < OLD_STEPS; st++) patSetDrums(g_patterns[p], (uint8_t)st, pf->drums[p][st], 0);
         }
     } else {              // v1: legacy mono cells, migrate on load
         ProjectFileV1* pf = (ProjectFileV1*)raw;
@@ -419,10 +442,11 @@ bool storageLoadProject(uint8_t slot) {
             for (int s = 0; s < NUM_SYNTHS; s++)
                 for (int st = 0; st < OLD_STEPS; st++) {
                     const SaveCellV1& c = pf->cells[p][s][st];
-                    g_patterns[p].synth[s][st].setMono(c.note, c.octave,
-                                                       c.flags & 1, c.flags & 2);
+                    SynthCell o; o.setMono(c.note, c.octave, c.flags & 1, c.flags & 2);
+                    if (c.note == NOTE_EMPTY) o = SynthCell{};
+                    patSetCell(g_patterns[p], (uint8_t)s, (uint8_t)st, o);
                 }
-            memcpy(g_patterns[p].drums, pf->drums[p], OLD_STEPS);
+            for (int st = 0; st < OLD_STEPS; st++) patSetDrums(g_patterns[p], (uint8_t)st, pf->drums[p][st], 0);
         }
     }
     free(raw);
@@ -436,7 +460,7 @@ bool storageLoadProject(uint8_t slot) {
 // One record per line. The device reads three kinds and skips everything else
 // (the tool keeps its own notes in the same file):
 //   BPM <n>                             tempo
-//   P <pattern 1..32> <bars 1|2>        that pattern's length
+//   P <pattern 1..64> <bars 1..4>       that pattern's length
 //   S <pattern> <repeats> <mutes, hex>  the next song slot; bit 0 = T1 .. bit 12 = D8
 int storageLoadArrangement(const char* filename) {
     char path[sizeof(DIR_SONGS) + LOOP_NAME_LEN + 2];
@@ -460,7 +484,7 @@ int storageLoadArrangement(const char* filename) {
         unsigned a = 0, b = 0, m = 0; float t = 0;
         if (sscanf(line, "BPM %f", &t) == 1) bpm = (int)(t + 0.5f);
         else if (sscanf(line, "P %u %u", &a, &b) == 2) {
-            if (a >= 1 && a <= NUM_PATTERNS && (b == 1 || b == 2)) bars[a - 1] = (uint8_t)b;
+            if (a >= 1 && a <= NUM_PATTERNS && b >= 1 && b <= MAX_BARS) bars[a - 1] = (uint8_t)b;
         } else if (sscanf(line, "S %u %u %x", &a, &b, &m) == 3) {
             if (a < 1 || a > NUM_PATTERNS || b < 1) continue;
             if (n < SONG_LENGTH)
@@ -474,7 +498,7 @@ int storageLoadArrangement(const char* filename) {
     engineLock();
     if (bpm >= 40 && bpm <= 300) g_bpm = (uint16_t)bpm;
     for (int p = 0; p < NUM_PATTERNS; p++)
-        if (bars[p]) setPatternLength((uint8_t)p, (uint8_t)(bars[p] * STEPS_PER_BAR));   // growing copies bar 1 to bar 2
+        if (bars[p]) setPatternLength((uint8_t)p, (uint8_t)(bars[p] * STEPS_PER_BAR));   // growing repeats the bars it has
     for (int i = 0; i < SONG_LENGTH; i++) { if (i < n) g_song[i] = slots[i]; else songClearSlot(i); }
     g_songLoopStart = 0;
     if (g_curStep >= patLen(g_patterns[g_curPattern])) g_curStep = 0;

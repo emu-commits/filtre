@@ -6,7 +6,7 @@
 #pragma once
 #include "config.h"
 
-extern int16_t g_wavetables[NUM_WT_TOTAL][WT_SIZE];
+extern const int16_t* g_wavetables[NUM_WT_TOTAL];   // built-ins are static; a user table is on the heap, once loaded
 extern char    g_wtNames[NUM_WT_TOTAL][WT_NAME_LEN];
 extern uint8_t g_numWavetables;   // built-ins + loaded user tables
 

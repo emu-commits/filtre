@@ -4,11 +4,11 @@
 //   - 2 sample decks, each CHOP (transients on the keys, sequenced)
 //     or LOOP (bar-locked), blended into one resonant filter
 //   - kick-driven pump, swung 909 drums, 303 bass writer
-//   - 8 patterns of 1 or 2 bars, per-step filter locks
+//   - 64 patterns of 1 to 4 bars from one shared pool, per-step filter locks
 //   - song chain with repeats, mutes and filter targets
 //   - offline bounce of mix + stems to microSD
 //   - Microgroove's 3 synth tracks, 808/909 lanes, mic + resampling
-//   - GBX v3 projects (loads Microgroove v1/v2 transparently)
+//   - GBX v6 projects (loads v1..v5, Microgroove's included)
 //
 // Portions of the synth voice, 808 drums, and audio task are derived
 // from qwertyuu/Cardputer-Adv-Tracker (MIT License) - see LICENSE.
@@ -100,6 +100,7 @@ void loop() {
     lastPass = passMs;
 
     inputUpdate();
+    if (g_patFull) { g_patFull = false; uiStatus("PATTERN MEMORY FULL"); }   // a write found no free bar
     micSamplerUpdate();
     uiTick();
 

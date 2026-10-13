@@ -28,6 +28,7 @@ void lidToggle() {}
 #include "sampler.h"
 #include "styles.h"
 #include "storage.h"
+#include "logo.h"
 
 #ifndef FILTRE_LID_ROTATION
 #define FILTRE_LID_ROTATION 1          // image upside down? use 3
@@ -89,7 +90,7 @@ lgfx::LGFX_Sprite* lidHostSprite() { return &lid; }
 static bool     s_inited = false;
 
 // palette
-static uint16_t C_BG, C_WAVE, C_WAVEB, C_HEAD, C_FILT, C_TICK, C_TEXT, C_DIM, C_BOX, C_HOT, C_ACC, C_SYN[3];
+static uint16_t C_BG, C_WAVE, C_WAVEB, C_HEAD, C_FILT, C_TICK, C_TEXT, C_DIM, C_BOX, C_HOT, C_ACC, C_SYN[3], C_LOGO;
 
 void lidInit() {
 #ifdef FILTRE_LID_FORCE_FAIL
@@ -114,22 +115,27 @@ void lidInit() {
     C_FILT = lid.color565(0xff, 0xb0, 0x00);  C_TICK = lid.color565(0x7a, 0x6a, 0x58);
     C_TEXT = 0xFFFF;                          C_DIM  = lid.color565(0x90, 0x88, 0x80);
     C_BOX  = lid.color565(0x30, 0x28, 0x22);  C_HOT  = lid.color565(0xff, 0x20, 0x60);
-    C_ACC  = lid.color565(0x63, 0x30, 0x00);
+    C_ACC  = lid.color565(0x63, 0x30, 0x00);  C_LOGO = lid.color565(0xff, 0x6a, 0x00);
     C_SYN[0] = lid.color565(0x00, 0xff, 0xff); C_SYN[1] = lid.color565(0x00, 0xff, 0x00); C_SYN[2] = lid.color565(0xff, 0xff, 0x00);
 }
 
 void lidBootScreen() {
     if (!g_lidOk) return;
     lid.startWrite();
-    lid.fillRect(0, 0, 107, LH, 0xF800);       // red | green | blue, full height
-    lid.fillRect(107, 0, 106, LH, 0x07E0);
-    lid.fillRect(213, 0, 107, LH, 0x001F);
-    lid.fillRect(40, 80, 240, 80, 0x0000);
-    lid.setTextColor(0xFFFF, 0x0000);
-    lid.setTextSize(4); lid.setCursor(88, 90);  lid.print("FILTRE");
-    lid.setTextSize(1); lid.setCursor(64, 136);
+    lid.fillScreen(0x0000);
+    const int sc = 48;                         // 3 px per logo unit: 60 px tall
+    const int lx = (LW - logoWidth(sc)) / 2, w = logoWidth(sc);
+    logoDraw(lid, lx, 46, sc, C_LOGO);
+    const uint16_t stripes[5] = { C_LOGO, lid.color565(0xe0, 0x48, 0x10), lid.color565(0xb0, 0x28, 0x18),
+                                  lid.color565(0x70, 0x18, 0x18), lid.color565(0x38, 0x10, 0x10) };
+    logoStripes(lid, lx, 116, w, 5, stripes);
+    lid.setTextSize(1); lid.setTextColor(0xFFFF, 0x0000);
+    const char* tag = "FRENCH TOUCH SAMPLER";
+    for (int i = 0; tag[i]; i++) { lid.setCursor(lx + 2 + i * 15, 150); lid.print(tag[i]); }
+    lid.setTextColor(C_DIM, 0x0000); lid.setCursor(lx + 2, 168);
+    lid.printf("%u PATTERNS   %u BARS   %uK SAMPLE MEMORY", NUM_PATTERNS, MAX_BARS, (unsigned)(g_arenaCap / 1024));
+    lid.setTextColor(C_TICK, 0x0000); lid.setCursor(lx + 2, 224);
     lid.printf("heap %u  arena %u  rot %d", (unsigned)ESP.getFreeHeap(), (unsigned)g_arenaCap, FILTRE_LID_ROTATION);
-    lid.setCursor(64, 148); lid.print("bars should read RED GREEN BLUE");
     lid.endWrite();
 }
 
@@ -193,10 +199,11 @@ static void footer() {
     } else if (mode == 1) {
         h = hashStr(h, st);
     } else {
-        snprintf(b, sizeof(b), "A %uK  B %uK  OS %uK  free %uK  POOL %d%%   ",
+        // samples: each owner, what is left, how full; then pattern memory, in bars left
+        snprintf(b, sizeof(b), "A %uK  B %uK  OS %uK  free %uK  POOL %d%%  BARS %u   ",
                  (unsigned)(samplerOwnerBytes(OWN_DECK_A) / 1024), (unsigned)(samplerOwnerBytes(OWN_DECK_B) / 1024),
                  (unsigned)(samplerOwnerBytes(OWN_ONESHOT) / 1024), (unsigned)(samplerFreeBytes() / 1024),
-                 g_arenaCap ? (int)(g_arenaUsed * 100ull / g_arenaCap) : 0);
+                 g_arenaCap ? (int)(g_arenaUsed * 100ull / g_arenaCap) : 0, patBarsFree());
         h = hashStr(h, b);
     }
     if (!stale(CI_FOOT, h)) return;
@@ -217,7 +224,7 @@ static void footer() {
 
 // ---------- PATTERN: the grid ----------
 // Rows top to bottom: T1 T2 T3, deck A, deck B, the cutoff-lock lane, drum
-// lanes 8..1 (kick at the bottom). 16 steps = the bar the cursor is in.
+// lanes 1..8 top to bottom (matches the mute keys). 16 steps = the bar the cursor is in.
 #define GX 16
 #define CW 19
 #define R_DECK 3
@@ -236,7 +243,7 @@ static void gridCell(int r, int c, const Pattern& p, uint16_t mu, int st, bool p
     lid.setTextSize(1);
 
     if (r < R_DECK) {                                   // synth note
-        const SynthCell& sc = p.synth[r][st];
+        const SynthCell sc = patCell(p, (uint8_t)r, (uint8_t)st);
         bool mute = mu & MUTE_SYNTH(r);
         hs = fnv(hs, &sc, sizeof(sc)); HASH(hs, mute);
         if (!stale(CI_CELL(r, c), hs)) return;
@@ -251,7 +258,7 @@ static void gridCell(int r, int c, const Pattern& p, uint16_t mu, int st, bool p
 
     } else if (r < R_LOCK) {                            // chop
         int d = r - R_DECK;
-        uint8_t v = p.chop[d][st], mode = g_decks[d].mode;
+        uint8_t v = patChop(p, (uint8_t)d, (uint8_t)st), mode = g_decks[d].mode;
         bool mute = mu & MUTE_DECK(d);
         HASH(hs, v); HASH(hs, mute); HASH(hs, mode);
         if (!stale(CI_CELL(r, c), hs)) return;
@@ -263,15 +270,15 @@ static void gridCell(int r, int c, const Pattern& p, uint16_t mu, int st, bool p
         if (cur) lid.drawRect(x, y, w, h, C_TEXT);
 
     } else if (r == R_LOCK) {                           // recorded cutoff: taller = more open
-        uint8_t v = (p.lockSet & (1u << st)) ? (uint8_t)(1 + p.lock[st] * 6 / 255) : 0;
+        uint8_t v = patLocked(p, (uint8_t)st) ? (uint8_t)(1 + patLock(p, (uint8_t)st) * 6 / 255) : 0;
         HASH(hs, v);
         if (!stale(CI_CELL(r, c), hs)) return;
         lid.fillRect(x, y, w, h, play ? C_BOX : C_BG);
         if (v) lid.fillRect(x + 1, y + h - v, w - 2, v, C_FILT);
 
     } else {                                            // drum lane
-        int lane = GRID_N - 1 - r;
-        bool hit = p.drums[st] & (1 << lane), acc = p.drumAcc[st] & (1 << lane), mute = mu & MUTE_LANE(lane);
+        int lane = r - R_DRUM;
+        bool hit = patDrums(p, (uint8_t)st) & (1 << lane), acc = patDrumAcc(p, (uint8_t)st) & (1 << lane), mute = mu & MUTE_LANE(lane);
         HASH(hs, hit); HASH(hs, acc); HASH(hs, mute);
         if (!stale(CI_CELL(r, c), hs)) return;
         lid.fillRect(x, y, w, h, play ? C_BOX : C_BG);
@@ -307,20 +314,22 @@ static void patternDraw() {
     const bool playing = g_playing, here = playing && g_playPattern == g_curPattern;
     const int playCol = (here && last >= base && last < base + STEPS_PER_BAR) ? last - base : -1;
     const int curCol = g_curStep - base;
-    const uint16_t mu = seqMuteMask();          // the pattern's, or in song mode the slot's
+    const uint16_t mu = seqEditMask();          // the pattern's, or in song mode the slot's
 
     char b[40], t[8];
     const uint8_t next = g_nextPattern;
     if (playing && !g_songMode && next != g_curPattern)      // a switch is queued for the pattern's end
                           snprintf(t, sizeof(t), "PT%u>%u", g_curPattern + 1, next + 1);
-    else if (len == NUM_STEPS) snprintf(t, sizeof(t), "PT%u.%u", g_curPattern + 1, base / STEPS_PER_BAR + 1);
+    else if (len > STEPS_PER_BAR) snprintf(t, sizeof(t), "PT%u.%u", g_curPattern + 1, base / STEPS_PER_BAR + 1);
     else                  snprintf(t, sizeof(t), "PT%u", g_curPattern + 1);
     snprintf(b, sizeof(b), "%-6s%3ubpm %-2s %s", t, g_bpm, g_keyNames[g_fx.key % 12], g_songMode ? "SNG" : "   ");
     uint32_t h = hashStr(FNV0, b); HASH(h, playing); HASH(h, g_recEnabled);
     if (stale(CI_TITLE, h)) {
         textAt(2, 2, 2, C_TEXT, b);
-        textAt(268, 2, 2, g_recEnabled ? C_HEAD : C_WAVEB,
-               playing ? (g_recEnabled ? "REC>" : "  > ") : (g_recEnabled ? "REC " : "    "));
+        lid.fillRect(234, 2, 32, 16, C_BG);                 // transport: record dot, play arrow
+        if (g_recEnabled) lid.fillCircle(241, 9, 5, C_HEAD);
+        if (playing)      lid.fillTriangle(252, 3, 252, 15, 263, 9, g_recEnabled ? C_HEAD : C_WAVEB);
+        logoDraw(lid, LW - logoWidth(8) - 2, 5, 8, C_LOGO);
     }
 
     for (int r = 0; r < GRID_N; r++) {
@@ -332,7 +341,7 @@ static void patternDraw() {
         else if (r < R_LOCK) { int d = r - R_DECK; sel = (g_curTrack == TRK_DECK_A + d); lab[0] = (char)('A' + d);
                                lc = (mu & MUTE_DECK(d)) ? C_BOX : sel ? C_TEXT : d ? C_WAVEB : C_WAVE; }
         else if (r == R_LOCK){ lab[0] = 'f'; lc = C_TICK; }
-        else                 { int lane = GRID_N - 1 - r; sel = (g_curTrack == TRK_DRUMS && g_curDrumLane == lane);
+        else                 { int lane = r - R_DRUM; sel = (g_curTrack == TRK_DRUMS && g_curDrumLane == lane);
                                lab[0] = (char)('1' + lane); lc = (mu & MUTE_LANE(lane)) ? C_BOX : sel ? C_TEXT : C_HOT; }
         h = FNV0; HASH(h, lab[0]); HASH(h, lc);
         if (stale(CI_LABEL(r), h)) textAt(4, rowY(r) + (rowH(r) - 8) / 2, 1, lc, lab);
@@ -448,23 +457,30 @@ static void songDraw() {
     const SongSlot& cs = g_song[g_songCursor];
     if (cs.pattern == SONG_EMPTY) snprintf(t, sizeof(t), "%u:--", g_songCursor + 1);
     else                          snprintf(t, sizeof(t), "%u:P%u x%u", g_songCursor + 1, cs.pattern + 1, cs.repeats);
-    snprintf(b, sizeof(b), "SONG %-3s P%u  %-14s", g_songMode ? "ON" : "off", g_curProject + 1, t);
-    if (stale(CI_TITLE, hashStr(FNV0, b))) textAt(2, 2, 2, C_TEXT, b);
+    snprintf(b, sizeof(b), "%s P%u %-11.11s", g_songMode ? "SONG    " : "SONG(PT)", g_curProject + 1, t);
+    if (stale(CI_TITLE, hashStr(FNV0, b))) {
+        textAt(2, 2, 2, C_TEXT, b);
+        logoDraw(lid, LW - logoWidth(8) - 2, 5, 8, C_LOGO);
+    }
 
     const bool playing = g_songMode && g_playing;
     const uint8_t pos = g_songPos;
     for (int i = 0; i < SONG_LENGTH; i++) {
         const SongSlot& sl = g_song[i];
         bool play = playing && i == pos, cur = (i == g_songCursor), loop = (i == g_songLoopStart);
-        uint32_t h = fnv(FNV0, &sl, sizeof(sl)); HASH(h, play); HASH(h, cur); HASH(h, loop);
+        const bool tag = (i == g_songTag);
+        uint32_t h = fnv(FNV0, &sl, sizeof(sl)); HASH(h, play); HASH(h, cur); HASH(h, loop); HASH(h, tag);
         if (!stale(i, h)) continue;
         int x = (i % 16) * 20, y = 24 + (i / 16) * 48;
         lid.fillRect(x, y, 19, 46, C_BG);
         lid.drawRect(x, y, 19, 46, cur ? C_TEXT : (play ? C_HEAD : C_BOX));
         if (loop) lid.drawFastVLine(x + 1, y + 1, 44, C_FILT);
         if (sl.pattern == SONG_EMPTY) continue;
-        lid.setTextSize(2); lid.setTextColor(play ? C_HEAD : C_TEXT); lid.setCursor(x + 4, y + 3);
+        lid.setTextColor(play ? C_HEAD : C_TEXT);
+        if (sl.pattern >= 9) { lid.setTextSize(1); lid.setCursor(x + 4, y + 7); }     // two digits: 12 px, not 24
+        else                 { lid.setTextSize(2); lid.setCursor(x + 4, y + 3); }
         lid.print(sl.pattern + 1);
+        if (tag) lid.fillRect(x + 14, y + 2, 4, 4, C_WAVEB);                        // the slot CPY tagged
         if (sl.repeats > 1) { lid.setTextSize(1); lid.setTextColor(C_DIM); lid.setCursor(x + 3, y + 20); lid.printf("x%u", sl.repeats); }
         if (sl.target != TARGET_NONE) {                 // cutoff column: shut -> open reads left to right
             int hh = 1 + sl.target * 12 / 254;
@@ -520,7 +536,7 @@ static uint16_t keyFunction(uint8_t kc, char* o) {
         if (i < NUM_SYNTHS)                  snprintf(o, 4, "T%d", i + 1);
         else if (i < NUM_SYNTHS + NUM_DECKS) snprintf(o, 4, "%c", 'A' + i - NUM_SYNTHS);
         else                                 snprintf(o, 4, "D%d", i - NUM_SYNTHS - NUM_DECKS + 1);
-        return (seqMuteMask() & (1u << i)) ? C_HEAD : C_TEXT;
+        return (seqEditMask() & (1u << i)) ? C_HEAD : C_TEXT;
     }
     const char* s = ""; uint16_t c = C_WAVE;
     switch (a) {
@@ -528,7 +544,7 @@ static uint16_t keyFunction(uint8_t kc, char* o) {
         case ACT_PAT_UP: s = "P+";  c = C_WAVEB; break;
         case ACT_COPY:   s = "CPY"; c = C_WAVEB; break;
         case ACT_LOAD:   s = "LD";  c = C_DIM;  break;
-        case ACT_ARR:    if (song) { s = "ARR"; c = C_DIM; } break;
+        case ACT_ARR:    if (song) { s = "ARR"; c = C_DIM; } else if (g_curPage == PAGE_PATTERN) { s = "BAR"; c = C_WAVEB; } break;
         case ACT_SAVE:   s = "SV";  c = C_DIM;  break;
         case ACT_PAGE:   s = "PG";  c = C_DIM;  break;
         case ACT_OCT_DN: s = song ? "PJ-" : "OC-"; c = C_DIM;  break;
@@ -542,11 +558,11 @@ static uint16_t keyFunction(uint8_t kc, char* o) {
         case ACT_DOWN:   s = "v";   break;
         case ACT_UP:     s = "^";   break;
         case ACT_RIGHT:  s = ">";   break;
-        case ACT_REC:    s = "REC"; break;
+        case ACT_REC:    if (!song) s = "REC"; break;
         case ACT_PLAY:   s = "PLY"; break;
-        case ACT_ACCENT: s = "ACC"; c = C_HOT;  break;
-        case ACT_SONG:   s = "SNG"; c = C_HEAD; break;
-        case ACT_SLIDE:  s = "SLD"; c = C_HEAD; break;
+        case ACT_ACCENT: if (!song) { s = "ACC"; c = C_HOT; } break;
+        case ACT_SONG:   if (!song) { s = "SNG"; c = C_HEAD; } break;
+        case ACT_SLIDE:  if (!song) { s = "SLD"; c = C_HEAD; } break;
         case ACT_AUX:    s = "AUX"; c = C_HEAD; break;
         case ACT_KEYS:   s = "MAP"; c = C_TEXT; break;
     }
@@ -584,18 +600,18 @@ static void keysStatic() {
     // the legend: one line per colour, in words
     const char* ln[8]; uint16_t lc[8];
     char pads[48];
-    lc[0] = C_TEXT;  ln[0] = g_songMode ? "Tap: mute in this SONG SLOT. Hold: select"
-                                        : "Tap: mute in this PATTERN.  Hold: select";
+    lc[0] = C_TEXT;  ln[0] = (g_songMode || g_curPage == PAGE_SONG) ? "Tap: mute in this SONG SLOT. Hold: select"
+                                                                     : "Tap: mute in this PATTERN.  Hold: select";
     lc[1] = C_WAVEB;
     switch (g_curPage) {
-        case PAGE_SONG:   ln[1] = "P- P+ the pattern in this slot"; break;
+        case PAGE_SONG:   ln[1] = "P- P+ pattern.  CPY tag slot, hold: paste"; break;
         default:          ln[1] = "P- P+ pattern (playing: at its end).  CPY"; break;
     }
     lc[2] = C_FILT;
     ln[2] = (g_curPage == PAGE_SONG) ? "CT slot filter target   RP slot repeats"
                                      : "CT cutoff   RS resonance.  Hold: sweep";
     lc[3] = C_HOT;
-    if (g_curPage == PAGE_SONG)        ln[3] = "SNG on: top row mutes the slot you hear";
+    if (g_curPage == PAGE_SONG)        ln[3] = "Here the mutes always belong to the slot";
     else if (g_curPage == PAGE_SAMPLE) ln[3] = uiBrowsingLoops() ? "Pads, notes play on PATTERN and SETTINGS"
                                                                  : "L1-L8: put this sample on a drum lane";
     else if (g_curTrack == TRK_DRUMS)  ln[3] = "1-8 drum lanes, 1 = kick.  ACC: accent";
@@ -607,14 +623,15 @@ static void keysStatic() {
     ln[4] = (g_curPage == PAGE_SETTINGS) ? "^ v pick a row, < > change it. BPM: a row"
                                          : "< v ^ > cursor.  CLR cell.  Hold: PLY top";
     lc[5] = C_DIM;
-    ln[5] = (g_curPage == PAGE_SONG) ? "PJ project for LD SV.  ARR: load a song"
-                                     : "PG next page (hold: PATTERN). OC octave";
+    ln[5] = (g_curPage == PAGE_SONG)    ? "PJ project for LD SV.  ARR: load a song"
+          : (g_curPage == PAGE_PATTERN) ? "PG page (hold: PATTERN).  BAR: next bar"
+                                        : "PG next page (hold: PATTERN). OC octave";
     lc[6] = C_DIM;   ln[6] = "Hold LD SV CLR CPY: again = yes. LD+SV demo";
     lc[7] = C_HEAD;
     switch (g_curPage) {
         case PAGE_SAMPLE: ln[7] = uiBrowsingLoops() ? "AUX load into the deck.  SNG song mode"
                                                     : "AUX hear the sample.  SNG song mode"; break;
-        case PAGE_SONG:   ln[7] = "AUX loop start (hold: bounce).  SNG song"; break;
+        case PAGE_SONG:   ln[7] = "AUX loop start (hold: bounce)"; break;
         default:          ln[7] = "Hold: SNG resample, SLD bass, AUX mic"; break;
     }
     lid.setFont(&fonts::Font2); lid.setTextWrap(false);
@@ -637,7 +654,7 @@ void lidUpdate(bool force) {
     if (g_keysOverlay) {
         uint32_t k = FNV0;
         HASH(k, g_curPage); HASH(k, g_curTrack); HASH(k, g_curPattern);
-        { uint16_t mu = seqMuteMask(); HASH(k, mu); HASH(k, g_songMode); }
+        { uint16_t mu = seqEditMask(); HASH(k, mu); HASH(k, g_songMode); HASH(k, g_curPage); }
         { bool l = uiBrowsingLoops(); HASH(k, l); }
         if (s_page != PAGE_KEYS || k != s_keysHash) { s_keysHash = k; s_page = PAGE_KEYS; keysStatic(); }
         lid.endWrite();

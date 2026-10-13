@@ -89,7 +89,7 @@ await shot('3-playing');
 await page.keyboard.press(' ');
 
 // bar-line controls keep the marks on the same music
-await page.locator('#tempoBox summary').click();
+if (!await page.locator('#tempoBox').evaluate(d => d.open)) await page.locator('#tempoBox summary').click();   // the page opens it itself on a shaky tempo
 await page.locator('[data-g="bar+"]').click();
 check(await page.evaluate(() => window.__arranger.doc.measures[0].pat === 1 && window.__arranger.doc.measures[15].pat === 2), 'measure 1 a bar later: marks move with the audio');
 await page.locator('[data-g="bar-"]').click();
@@ -105,6 +105,22 @@ await page2.waitForFunction(() => window.__arranger.doc.measures.length > 8);
 check(await page2.evaluate(() => window.__arranger.serialize()) === saved, 'open the saved file: identical when saved again');
 if (shots) await page2.screenshot({ path: join(shots, '5-phone.png') });
 check(await page2.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), 'phone width: no sideways scroll');
+
+// pattern 64, four bars: picking it on one measure takes the three after it
+if (info.n >= 34) {
+  check(await page.locator('#pats button').count() === 65, '64 patterns to pick from');
+  await page.locator('.m').nth(24).click();
+  await page.locator('#pats button[data-p="64"]').click();
+  await page.locator('#bars4').click();
+  const one = await page.evaluate(() => window.__arranger.built.issues.map(i => i.text));
+  check(one.some(t => /^Measure 25: P64 is 4 bars long but only its first bar fits/.test(t)), `one measure of a 4-bar pattern is reported (${one})`);
+  await page.locator('.m').nth(29).click();
+  await page.locator('#pats button[data-p="64"]').click();
+  const four = await page.evaluate(() => ({ m: window.__arranger.doc.measures.slice(28, 34).map(x => x.pat), text: window.__arranger.serialize() }));
+  check(JSON.stringify(four.m) === '[0,64,64,64,64,0]' && four.text.includes('\nP 64 4\n') && four.text.includes('\nS 64 1 0000\n'), `it spans four measures and saves as one slot (${four.m})`);
+  check(await page.locator('.m.bar2.joinL.joinR').count() === 2 && await page.locator('#bars4.cur').count() === 1, 'drawn as one piece, bar 2 and 3 joined both ways');
+  await shot('6-four-bars');
+}
 
 check(errors.length === 0, 'no page errors: ' + errors.join(' / '));
 console.log(`${pass} passed, ${fail} failed`);

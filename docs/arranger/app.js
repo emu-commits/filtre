@@ -3,7 +3,7 @@
 // pattern and the parts that are silent, save the song. The model lives in
 // arr.js and the bar-line detection in beat.js; this file is glue and DOM.
 import { analyse, monoMix } from './beat.js';
-import { NUM_PATTERNS, SONG_LENGTH, ROWS, ROW_KEYS, MUTE_MASK,
+import { NUM_PATTERNS, MAX_BARS, SONG_LENGTH, ROWS, ROW_KEYS, MUTE_MASK,
          newDoc, patBars, build, place, serialize, parse, resize, muteNames } from './arr.js';
 
 const $ = id => document.getElementById(id);
@@ -104,11 +104,11 @@ function paintCell(i) {
   if (i === nowCell) cls += ' now';
   let label = '';
   if (m.pat && pl) {
-    const two = pl.run.bars === 2;
-    if (pl.orphan) { cls += ' orphan'; label = `P${m.pat} <small>half</small>`; }
-    else if (two && pl.bar === 1) { cls += ' bar2 joinL'; label = '<small>bar 2</small>'; }
+    const bars = pl.run.bars;                           // a long pattern is drawn as one piece across its measures
+    if (pl.orphan) { cls += ' orphan'; label = `P${m.pat} <small>part</small>`; }
+    else if (pl.bar > 0) { cls += ' bar2 joinL' + (pl.bar < bars - 1 ? ' joinR' : ''); label = `<small>bar ${pl.bar + 1}</small>`; }
     else {
-      if (two) cls += ' joinR';
+      if (bars > 1) cls += ' joinR';
       const nm = doc.patterns[m.pat] && doc.patterns[m.pat].name;
       label = `P${m.pat}${nm && pl.run.start === i ? ` <small>${esc(nm)}</small>` : ''}`;
     }
@@ -243,9 +243,13 @@ function selPattern() {            // the pattern all selected measures share, 0
 function setPattern(p, picked) {
   const r = selRange();
   if (!r) return;
-  // one measure, and a two-bar pattern picked by name: it takes the next one too, if that is free
-  // (not while stepping through the numbers with [ ], which would grab it in passing)
-  if (picked && p && r[0] === r[1] && patBars(doc, p) === 2 && r[0] + 1 < doc.measures.length && !doc.measures[r[0] + 1].pat) sel = { a: r[0], b: r[0] + 1 };
+  // one measure, and a longer pattern picked by name: it takes the measures after it too, if they are free
+  // (not while stepping through the numbers with [ ], which would grab them in passing)
+  if (picked && p && r[0] === r[1]) {
+    let end = r[0];
+    while (end - r[0] + 1 < patBars(doc, p) && end + 1 < doc.measures.length && !doc.measures[end + 1].pat) end++;
+    if (end - r[0] + 1 === patBars(doc, p)) sel = { a: r[0], b: end };
+  }
   eachSelected(m => { m.pat = p; if (!p) m.mute = 0; });
 }
 function stepPattern(dir) {
@@ -290,8 +294,7 @@ function buildInspector() {
     el.addEventListener('click', () => toggleMute(b));
     parts.appendChild(el);
   });
-  $('bars1').addEventListener('click', () => setBars(1));
-  $('bars2').addEventListener('click', () => setBars(2));
+  for (let n = 1; n <= MAX_BARS; n++) $('bars' + n).addEventListener('click', () => setBars(n));
   $('patName').addEventListener('change', e => {
     const p = selPattern();
     if (p <= 0) return;
@@ -324,7 +327,7 @@ function paintInspector() {
   const used = new Set(built.used);
   for (const b of $('pats').children) {
     const n = +b.dataset.p;
-    b.className = (n === p && r ? 'cur ' : '') + (n && used.has(n) ? 'used ' : '') + (n && patBars(doc, n) === 2 ? 'two' : '');
+    b.className = (n === p && r ? 'cur ' : '') + (n && used.has(n) ? 'used ' : '') + (n && patBars(doc, n) > 1 ? 'two' : '');
   }
   const has = p > 0;
   $('patField').style.display = has ? '' : 'none';
@@ -333,10 +336,9 @@ function paintInspector() {
     let uses = 0;
     for (const m of doc.measures) if (m.pat === p) uses++;
     $('patLab').innerHTML = `Pattern ${p} <span class="dim">everywhere it is used</span>`;
-    $('bars1').className = bars === 1 ? 'cur' : '';
-    $('bars2').className = bars === 2 ? 'cur' : '';
+    for (let n = 1; n <= MAX_BARS; n++) $('bars' + n).className = bars === n ? 'cur' : '';
     if (document.activeElement !== $('patName')) $('patName').value = (doc.patterns[p] && doc.patterns[p].name) || '';
-    $('patNote').textContent = `${uses} measure${uses === 1 ? '' : 's'} in this track. A 2-bar pattern takes two measures each time it plays.`;
+    $('patNote').textContent = `${uses} measure${uses === 1 ? '' : 's'} in this track. ${bars > 1 ? `It takes ${bars} measures each time it plays.` : 'Up to 4 bars; a longer pattern takes that many measures each time it plays.'}`;
   }
   let on = 0, off = 0, n = 0;
   const partBtns = $('parts').children;

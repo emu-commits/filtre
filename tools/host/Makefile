@@ -8,6 +8,7 @@ CXXFLAGS := -std=c++17 -O2 -g -Wall -Wno-misleading-indentation -Wno-parentheses
 
 test: build/filtre_test
 	rm -rf build/sd && mkdir -p build/sd && cp -r $(ROOT)/factory-sd/groovebox build/sd/
+	cp fixtures/v5.gbx build/sd/groovebox/projects/P7.gbx && cp fixtures/v4.gbx build/sd/groovebox/projects/P8.gbx
 	FILTRE_SD=build/sd ./build/filtre_test
 
 build/filtre_test: $(OBJ)

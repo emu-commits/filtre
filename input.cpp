@@ -197,8 +197,12 @@ static void adjustDeckParam(uint8_t di, uint8_t row, int dir, bool fine) {
             break;
         }
         case DR_PATLEN:
-            setPatternLength(g_curPattern, curLen() == NUM_STEPS ? STEPS_PER_BAR : NUM_STEPS);
-            uiStatus(curLen() == NUM_STEPS ? "2 BARS" : "1 BAR"); break;
+        {   // left/right step it and stop at the ends: wrapping 4 -> 1 would drop three bars on one key
+            int bars = constrain(curLen() / STEPS_PER_BAR + (dir > 0 ? 1 : -1), 1, MAX_BARS);
+            if (bars * STEPS_PER_BAR != curLen()) setPatternLength(g_curPattern, (uint8_t)(bars * STEPS_PER_BAR));
+            char lm[20]; snprintf(lm, sizeof(lm), "%d BAR%s  %u FREE", bars, bars > 1 ? "S" : "", patBarsFree());
+            uiStatus(lm); break;
+        }
         case DR_SLICEPOS: deckNudgeSlice(di, k.lastSlice, dir * (fine ? 22 : 220)); break;
         case DR_IN:
             if (len) deckSetRegion(di, (uint32_t)constrain((int32_t)k.in + dir * (int32_t)(len / (fine ? 2048 : 64)),
@@ -222,18 +226,18 @@ static void adjustDeckParam(uint8_t di, uint8_t row, int dir, bool fine) {
     }
 }
 
-// PATTERN rows top to bottom: T1 T2 T3, deck A, deck B, drum lanes 8..1
+// PATTERN rows top to bottom: T1 T2 T3, deck A, deck B, drum lanes 1..8
 #define GRID_ROWS (NUM_SYNTHS + NUM_DECKS + NUM_DRUM_LANES)
 static int gridRow() {
     if (g_curTrack < NUM_SYNTHS) return g_curTrack;
     if (trackIsDeck(g_curTrack)) return NUM_SYNTHS + trackDeck(g_curTrack);
-    return NUM_SYNTHS + NUM_DECKS + (NUM_DRUM_LANES - 1 - g_curDrumLane);
+    return NUM_SYNTHS + NUM_DECKS + g_curDrumLane;
 }
 static void setGridRow(int r) {
     r = constrain(r, 0, GRID_ROWS - 1);
     if (r < NUM_SYNTHS) g_curTrack = (uint8_t)r;
     else if (r < NUM_SYNTHS + NUM_DECKS) g_curTrack = (uint8_t)(TRK_DECK_A + r - NUM_SYNTHS);
-    else { g_curTrack = TRK_DRUMS; g_curDrumLane = (uint8_t)(NUM_DRUM_LANES - 1 - (r - NUM_SYNTHS - NUM_DECKS)); }
+    else { g_curTrack = TRK_DRUMS; g_curDrumLane = (uint8_t)(r - NUM_SYNTHS - NUM_DECKS); }
 }
 
 // ---------- arrows, per page ----------
@@ -343,6 +347,7 @@ static void doImmediate(uint8_t act, const KeySnap& now) {
             filterKeyDown(act); break;
 
         case ACT_REC:
+            if (g_curPage == PAGE_SONG) break;            // nothing to record on the SONG page
             g_recEnabled = !g_recEnabled;
             uiStatus(g_recEnabled ? "REC ON" : "REC OFF");
             g_needRedraw = true; break;
@@ -387,6 +392,12 @@ static void doImmediate(uint8_t act, const KeySnap& now) {
         }
 
         case ACT_ARR:                                     // SONG page: the arrangements on the card
+            if (g_curPage == PAGE_PATTERN) {                  // PATTERN page: the other bar of a 2-bar pattern
+                if (curLen() == STEPS_PER_BAR) { uiStatus("PATTERN IS 1 BAR"); break; }
+                g_curStep = (uint8_t)((g_curStep + STEPS_PER_BAR) % curLen());
+                char bm[12]; snprintf(bm, sizeof(bm), "BAR %u/%u", g_curStep / STEPS_PER_BAR + 1, curLen() / STEPS_PER_BAR);
+                uiStatus(bm); g_needRedraw = true; break;
+            }
             if (g_curPage != PAGE_SONG) { uiStatus("ARRANGEMENTS: SONG PAGE"); break; }
             g_arrList = !g_arrList;
             if (g_arrList) {
@@ -461,6 +472,13 @@ static void doShort(uint8_t act) {
         }
         case ACT_COPY: {
             char m[24];
+            if (g_curPage == PAGE_SONG) {                 // tag the slot under the cursor
+                if (g_arrList) break;
+                if (g_song[g_songCursor].pattern == SONG_EMPTY) { uiStatus("SLOT IS EMPTY"); break; }
+                g_songTag = (int8_t)g_songCursor;
+                snprintf(m, sizeof(m), "S%u TAGGED hold=PASTE", g_songCursor + 1);
+                uiStatus(m); g_needRedraw = true; break;
+            }
             s_copySrc = (int8_t)g_curPattern;
             snprintf(m, sizeof(m), "P%u COPIED hold=PASTE", g_curPattern + 1);
             uiStatus(m); break;
@@ -482,16 +500,19 @@ static void doShort(uint8_t act) {
             g_needRedraw = true; break;
 
         case ACT_SONG:
+            if (g_curPage == PAGE_SONG) break;            // the SONG page is always song mode
             g_songMode = !g_songMode;
             g_nextPattern = g_curPattern;         // nothing stays queued across the switch
             uiStatus(g_songMode ? "SONG MODE: SLOT MUTES" : "PATTERN MODE: ITS MUTES");
             g_needRedraw = true; break;
 
         case ACT_SLIDE:
+            if (g_curPage == PAGE_SONG) break;
             if (g_curTrack < NUM_SYNTHS) {
-                SynthCell& c = g_patterns[g_curPattern].synth[g_curTrack][g_curStep];
+                SynthCell c = patCell(g_patterns[g_curPattern], g_curTrack, g_curStep);
                 if (!c.empty()) {
                     c.slide = !c.slide;
+                    patSetCell(g_patterns[g_curPattern], g_curTrack, g_curStep, c);
                     if (c.slide && g_synths[g_curTrack].voices > 1)
                         uiStatus("SLIDE = MONO ONLY");
                     g_needRedraw = true;
@@ -567,19 +588,31 @@ static void doLong(uint8_t act) {
         }
         case ACT_COPY: {                      // paste the tagged pattern over this one
             char m[28];
+            if (g_curPage == PAGE_SONG) {                 // the tagged slot, whole, over the one under the cursor
+                if (g_arrList) break;
+                if (g_songTag < 0)                              { uiStatus("TAP CPY ON A SLOT FIRST"); break; }
+                if ((uint8_t)g_songTag == g_songCursor)         { snprintf(m, sizeof(m), "S%u IS THE TAGGED ONE", g_songCursor + 1);
+                                                                  uiStatus(m); break; }
+                if (g_song[g_songTag].pattern == SONG_EMPTY)    { uiStatus("TAGGED SLOT IS EMPTY"); break; }
+                g_song[g_songCursor] = g_song[g_songTag];
+                snprintf(m, sizeof(m), "S%d>S%u PASTED", g_songTag + 1, g_songCursor + 1);
+                uiStatus(m); g_needRedraw = true; break;
+            }
             if (s_copySrc < 0)                        { uiStatus("TAP CPY ON A PATTERN FIRST"); break; }
             if ((uint8_t)s_copySrc == g_curPattern)   { snprintf(m, sizeof(m), "P%u IS THE COPY ITSELF", g_curPattern + 1);
                                                         uiStatus(m); break; }
             snprintf(m, sizeof(m), "PASTE P%u>P%u: You sure?", s_copySrc + 1, g_curPattern + 1);
-            confirmAsk(CONF_PASTE, act, (uint8_t)(s_copySrc | (g_curPattern << 4)), m);
+            confirmAsk(CONF_PASTE, act, g_curPattern, m);     // the source is s_copySrc when the answer comes
             break;
         }
         case ACT_SONG:                        // long SONG = resample the mix
+            if (g_curPage == PAGE_SONG) break;
             if (!g_playing) uiStatus("PLAY, THEN HOLD");
             else if (!resampleArm(g_curTrack)) uiStatus("NO ROOM / BUSY");
             break;
 
         case ACT_SLIDE:                       // long SLD = write the bass line
+            if (g_curPage == PAGE_SONG) break;
             writeBass(g_curPattern, g_fx.bassMode);
             { char m[24]; snprintf(m, sizeof(m), "BASS %s in %s", g_bassModeNames[g_fx.bassMode], g_keyNames[g_fx.key]);
               uiStatus(m); }
@@ -626,7 +659,7 @@ static void confirmRun(uint8_t kind, uint8_t arg) {
             int n = storageLoadArrangement(g_fileList[g_fileSel]);
             char m[24];
             if (n > 0) {
-                g_arrList = false; g_songCursor = 0; g_songMode = true;
+                g_arrList = false; g_songCursor = 0; g_songTag = -1; g_songMode = true;
                 g_nextPattern = g_curPattern;
                 snprintf(m, sizeof(m), "%d SLOTS, SONG MODE ON", n);
             } else snprintf(m, sizeof(m), "NOT AN ARRANGEMENT");
@@ -643,8 +676,9 @@ static void confirmRun(uint8_t kind, uint8_t arg) {
             break;
         case CONF_PASTE: {
             char m[16];
-            pastePattern(arg & 0x0F, arg >> 4);
-            snprintf(m, sizeof(m), "PASTED > P%u", (arg >> 4) + 1);
+            if (s_copySrc < 0) break;
+            pastePattern((uint8_t)s_copySrc, arg);
+            snprintf(m, sizeof(m), "PASTED > P%u", arg + 1);
             uiStatus(m);
             break;
         }

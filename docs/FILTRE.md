@@ -75,7 +75,7 @@ The single source is `keymap.h`. Where FILTRE differs from Microgroove:
 | **SONG** (`n`) | song mode | resample: a pad (1.9 s), or one bar-exact pattern onto the focused deck |
 
 Tempo has no key: it is the BPM row on SETTINGS. The piano stops at `l` / `o`:
-`;` is the up arrow and `[` is pattern −. `m` is unbound.
+`;` is the up arrow and `[` is pattern −. `m` steps to the next bar of the pattern on the PATTERN page.
 
 Mutes are a 13-bit mask, one bit per grid row, and there are two sets: one in
 each pattern (`Pattern.mute`) and one in each song slot (`SongSlot.mute`).
@@ -84,6 +84,12 @@ Song mode picks the set that is in force and that the top row edits
 playing slot's (stopped: the pattern on screen / the slot under the SONG
 cursor). The slot's mask replaces the pattern's, it is not added to it, and
 neither is copied to the other except when a slot is first created.
+The SONG page is the exception to "song mode picks": there the top row and the
+mute display use `seqEditMask` / `seqToggleMute`, which always take the slot
+(playing slot in song mode, else the one under the cursor), while what is heard
+(`seqMuteMask`) still follows `g_songMode`. `n`, `z`, `x`, `v` do nothing on
+SONG; `'` there tags a slot (`g_songTag`) and a hold pastes the whole
+`SongSlot` over the cursor slot.
 
 There is no HELP page. Holding `ok` draws the keyboard on the lid from
 `keymap.h`'s own lookups, so the on-device help cannot go stale.
@@ -131,15 +137,30 @@ the repaint.)
 ## Samples and memory
 
 The Cardputer-ADV has **no PSRAM**. One arena, sized at boot from the free heap
-(roughly 150–220 KB), holds deck A, deck B and the drum one-shots. The SAMPLE
+(about 230 KB expected with this build, 256 KB at most; the boot screen shows
+the real figure), holds deck A, deck B and the drum one-shots. The SAMPLE
 page and the lid always show `A / B / OS / free`.
+
+**Pattern memory** is a second, fixed pool: 96 bars of 226 bytes (21.7 KB)
+shared by all 64 patterns. A pattern is 1 to 4 bars long and only names its
+bars; a bar is taken from the pool when the first note, hit, chop or cutoff
+lock is written into it and goes back when it is emptied, the pattern is
+cleared or shortened. An empty pattern costs 8 bytes. A synth step is 3 bytes
+(three notes of 4 + 3 bits, accent, slide). The lid's bottom line shows
+`BARS n` left; a write with none left is refused with `PATTERN MEMORY FULL`.
+The 32 fixed 2-bar patterns this replaces took 30 KB.
+
+Where the rest of the RAM went: the wavetable loader's 8 KB decode buffer and
+the eight user wavetable slots (4 KB) are now heap, taken only while or when
+needed; a project save needs 1 KB instead of 7.5 KB; the heap left to the rest
+of the firmware when the arena is sized is 48 KB instead of 56 KB.
 
 - Put **WAV sections** in `/groovebox/loops`: 8/16/24-bit PCM or 32-bit float,
   mono or stereo, any sample rate. They are summed to mono, resampled to
   22.05 kHz, DC-removed and peak-normalised on load. MP3 is not supported.
 - A sample is stored 16-bit if it fits, otherwise as 8-bit µ-law (`LO-FI`,
-  half the memory, about the fidelity of an SP-1200). 220 KB is about
-  5 s at 16-bit or 10 s lo-fi, shared between both decks.
+  half the memory, about the fidelity of an SP-1200). 230 KB is about
+  5.2 s at 16-bit or 10.4 s lo-fi, shared between both decks.
 - A file longer than the free memory is **cut**, and says so (`CUT TO 6.2s`).
   START moves the window into the file for the next load.
 - File names up to 63 characters.
@@ -165,12 +186,13 @@ not written. With no song chain, it bounces four passes of the current pattern.
 
 ## Project files
 
-Saves are GBX **v5**: v3 plus the per-pattern mutes (v4), 32 patterns (the
-24 after the first eight follow the fixed block) and 13-row song-slot mutes.
-v3 and v4 still load; their slots get the pattern's mutes plus their old
-coarse slot mutes, so the song sounds as it did. Microgroove v1 and v2
-projects load and keep their own feel (straight 16ths, no decks); the next
-save writes v5. Deck audio is referenced by file name, never embedded.
+Saves are GBX **v6**: the settings block of v5, then each of the 64 patterns
+as its length, mutes and only the bars that hold something (an empty project
+is about 2 KB; v5 was always 28 KB). v3, v4 and v5 still load (v3/v4 slots get
+the pattern's mutes plus their old coarse slot mutes, so the song sounds as it
+did), as do Microgroove v1 and v2 projects, which keep their own feel
+(straight 16ths, no decks). The next save writes v6, which firmware older
+than this cannot open. Deck audio is referenced by file name, never embedded.
 
 ```
 /groovebox/samples/      drum one-shots
@@ -192,7 +214,7 @@ line from it and skips the rest, which are the tool's own:
 ```
 FILTRE-ARR 1
 BPM 124                  tempo, rounded (the tool keeps the exact one in TEMPO)
-P 1 2 main loop          pattern 1 is 2 bars long (the name is for the tool)
+P 1 2 main loop          pattern 1 is 2 bars long, 1..4 (the name is for the tool)
 S 1 4 1FE0               next slot: pattern 1, 4 times, mutes in hex (bit 0 = T1 .. bit 12 = D8)
 ```
 

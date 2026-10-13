@@ -53,7 +53,7 @@ The top row is the pattern grid turned sideways: its 13 keys are the 13 rows
 | `x` | slide on the note under the cursor | write a bass line |
 | `b` | (depends on page) | record from the mic |
 | `n` | song mode on / off. It also picks which mutes the top row edits: the pattern's (off) or the song slot's (on) | resample (while playing) |
-| `m` | SONG page: the arrangements on the card | |
+| `m` | PATTERN page: the next bar of a pattern longer than one bar. SONG page: the arrangements on the card | |
 | `\` | show which project slot | asks **LOAD: Are you sure?** Press `\` again to load |
 | `del` | show which project slot | asks **SAVE: Are you sure?** Press `del` again to save |
 | `\` + `del` together | load the built-in demo | |
@@ -165,8 +165,16 @@ waveform with the slice marks while you do)
 - **IN** / **OUT**: trim the start and end of the whole sample.
 - **PITCH**: ±12 semitones. **LEVEL**: deck volume.
 
-**One or two bars:** SETTINGS page, **LENGTH** row, tap `/`. On the PATTERN page
-moving the cursor past step 16 shows the second bar.
+**One to four bars:** SETTINGS page, **LENGTH** row: `/` adds a bar, `,` takes
+the last one away (what was in it is gone). New bars start as copies of the
+ones the pattern has. On the PATTERN page moving the cursor past step 16 shows
+the next bar, and `m` steps through the bars, keeping the same column; the
+title reads `PT5.3` for pattern 5, bar 3.
+
+**Pattern memory:** there are 64 patterns and room for 96 bars between them.
+Only bars with something in them count, so empty patterns are free. The
+bottom line of the lid shows `BARS` left; when it reaches 0 the footer says
+`PATTERN MEMORY FULL` until you clear or shorten a pattern.
 
 ## 6. The filter
 
@@ -275,7 +283,7 @@ again to bring it back. Hold `ok` to see which rows are muted (red).
 
 Mutes are a state, not something you record: REC does not matter, and a mute
 covers the whole pattern. There are two sets, and **song mode (`n`) picks the
-one you hear and edit**:
+one you hear and edit** on every page except SONG:
 
 - **Song mode off:** the mutes belong to the pattern and are saved with it, so
   pattern 2 can be pattern 1 without the kick: copy, paste, tap `5`.
@@ -285,7 +293,10 @@ one you hear and edit**:
 
 Neither set is ever copied onto the other: switch back and forth and each is
 as you left it. The one exception is a slot you have just created, which
-starts with its pattern's mutes. The footer says where a mute landed:
+starts with its pattern's mutes. **On the SONG page the mutes always belong
+to the slot** (the playing one, else the one under the cursor), whatever song
+mode says; leaving the page does not change song mode. The footer says where a
+mute landed:
 **P3 LANE 1 MUTED** or **S12 LANE 1 MUTED**.
 
 ## 11. Arrange the song
@@ -301,15 +312,18 @@ are the 13 rows, left to right; a red one is muted.
 | `]` / `[` | next / previous pattern in this slot. An empty slot starts as a copy of the slot before it |
 | `p` / `tab` | repeats +1 / −1 (1 to 16) |
 | `u` / `e` | filter target up / down. The cutoff glides to this value across the slot. Below zero = no target |
-| top row `` ` `` … `=` | with song mode on (`n`): mute that row in this slot. Same 13 keys as everywhere else |
+| top row `` ` `` … `=` | mute that row in this slot (always, on this page). Same 13 keys as everywhere else |
+| `'` | tag this slot. Hold `'` on another slot to paste the tagged one over it: pattern, repeats, mutes and filter target. A small mark shows the tagged slot |
 | `m` | list the arrangements on the card (see below) |
 | `c` | empty this slot |
 | `b` | make this slot the loop-back point |
 
 The song ends at the first empty slot and jumps back to the loop-back point.
 
-Tap `n` for **SONG MODE**, then hold `space` to play from the top. Tap `n`
-again to go back to looping one pattern.
+On any other page tap `n` for **SONG MODE**, then hold `space` to play from the
+top. Tap `n` again to go back to looping one pattern. The SONG page has no `n`,
+`z`, `x` or `v` of its own. It shows **SONG(PT)** when song mode is off, which
+means Play there still plays the one pattern.
 
 A classic shape, using one pattern and its copies:
 
@@ -330,7 +344,7 @@ terms: <https://emu-commits.github.io/filtre/arranger/>
 1. Open the track there (MP3 or WAV; it stays on your computer). It finds the
    tempo and the bar lines and shows every measure.
 2. Give each measure a pattern number and mute the parts that are silent in
-   it. Say per pattern whether it is 1 or 2 bars long.
+   it. Say per pattern how long it is, 1 to 4 bars.
 3. **Save .arr** and copy the file to `/groovebox/songs/` on the card.
 4. On FILTRE: SONG page, tap `m`. Pick the file with `;` and `.`, hold `\`,
    and answer **LOAD …: You sure?** with `\` again.
@@ -396,7 +410,8 @@ seconds. **QUALITY** forces 16-bit or lo-fi. Both apply the next time you load.
 screen becomes the editor.
 
 **Memory check.** The bottom line of the lid shows what each deck and the
-one-shots are using and how much sample memory is free.
+one-shots are using, how much sample memory is free, and how many bars of
+pattern memory are left (`BARS`).
 
 ## When something does not work
 
@@ -405,6 +420,7 @@ one-shots are using and how much sample memory is free.
 | PG > SAMPLE: LOAD A LOOP | you hit a chop key but the deck is empty |
 | LOAD FAILED | not a WAV, or no room left. Unload by loading something shorter |
 | CUT TO 6.2s | the file was longer than free memory; you have the first 6.2 s from START |
+| PATTERN MEMORY FULL | all 96 bars are in use; the note was not written. Clear or shorten a pattern |
 | DECK A: FIT? | length is not a whole number of bars at this tempo; use BPM<LOOP or FIT |
 | NO ROOM / BUSY | resample or mic has no memory left |
 | PLACE A PATTERN FIRST | SONG page: the slot is empty, put a pattern in it first |

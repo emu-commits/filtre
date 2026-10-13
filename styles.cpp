@@ -69,27 +69,35 @@ static const StyleDef k_styles[STYLE_COUNT] = {
       { FOUR, BACK, OFF8,           0,              0, 0 }, -1 },
 };
 
-static void writeDrums(Pattern& p, const StyleDef& s);
+// one step of a style's drums: hits and accents as lane bits
+static void styleStep(const StyleDef& s, int st, uint8_t* m, uint8_t* a) {
+    *m = *a = 0;
+    for (int l = 0; l < 6; l++) {
+        if (s.steps[l]  & (1u << (st % STEPS_PER_BAR))) *m |= (1 << l);
+        if (s.accent[l] & (1u << (st % STEPS_PER_BAR))) *a |= (1 << l);
+    }
+}
 
 // A style may freely replace drums that another style wrote. Hand-edited
 // drums, or a T1 line about to be replaced by the style's bass, need a hold.
 bool styleNeedsConfirm(uint8_t style, uint8_t pattern) {
     if (style >= STYLE_COUNT) return false;
     const Pattern& p = g_patterns[pattern % NUM_PATTERNS];
+    const uint8_t len = patLen(p);
     bool empty = true, fromStyle = false;
-    for (int st = 0; st < NUM_STEPS; st++) if (p.drums[st]) empty = false;
+    for (int st = 0; st < len; st++) if (patDrums(p, st)) empty = false;
     if (!empty) {
-        static Pattern tmp;
         for (int k = 0; k < STYLE_COUNT && !fromStyle; k++) {
-            tmp.length = p.length;
-            writeDrums(tmp, k_styles[k]);
-            fromStyle = memcmp(tmp.drums, p.drums, patLen(p)) == 0 &&
-                        memcmp(tmp.drumAcc, p.drumAcc, patLen(p)) == 0;
+            fromStyle = true;
+            for (int st = 0; st < len && fromStyle; st++) {
+                uint8_t m, a; styleStep(k_styles[k], st, &m, &a);
+                fromStyle = patDrums(p, st) == m && patDrumAcc(p, st) == (a & m);
+            }
         }
         if (!fromStyle) return true;
     }
     if (k_styles[style].bass >= 0)
-        for (int st = 0; st < NUM_STEPS; st++) if (!p.synth[0][st].empty()) return true;
+        for (int st = 0; st < len; st++) if (!patCell(p, 0, st).empty()) return true;
     return false;
 }
 
@@ -101,24 +109,27 @@ void writeBass(uint8_t pattern, uint8_t mode) {
     uint8_t fifth = (uint8_t)((root + 7) % 12 + 1), fifthOct = (uint8_t)(oct + (root + 7) / 12);
     uint8_t len = patLen(p);
 
-    for (int st = 0; st < len; st++) p.synth[0][st].clear(oct);
+    for (int st = 0; st < len; st++) patSetCell(p, 0, (uint8_t)st, SynthCell{});
+    auto put = [&](int st, uint8_t n, uint8_t o, bool acc, bool slide) {
+        SynthCell c; c.setMono(n, o, acc, slide);
+        patSetCell(p, 0, (uint8_t)st, c);
+    };
     for (int bar = 0; bar < len; bar += STEPS_PER_BAR) {
-        SynthCell* c = &p.synth[0][bar];
         switch (mode) {
             case BASS_OFFBEAT:
-                c[2].setMono(n1, oct, true, false);  c[6].setMono(n1, oct, false, false);
-                c[10].setMono(n1, oct, true, false); c[14].setMono(n1, oct, false, false);
+                put(bar + 2, n1, oct, true, false);  put(bar + 6, n1, oct, false, false);
+                put(bar + 10, n1, oct, true, false); put(bar + 14, n1, oct, false, false);
                 break;
             case BASS_FIFTH:
-                c[0].setMono(n1, oct, true, false);  c[4].setMono(n1, oct, false, false);
-                c[8].setMono(fifth, fifthOct, false, true);
-                c[12].setMono(n1, oct, false, false);
+                put(bar + 0, n1, oct, true, false);  put(bar + 4, n1, oct, false, false);
+                put(bar + 8, fifth, fifthOct, false, true);
+                put(bar + 12, n1, oct, false, false);
                 break;
             default:   // OCTAVE: root, octave slid into, root
-                c[0].setMono(n1, oct, true, false);  c[2].setMono(n1, (uint8_t)(oct + 1), false, true);
-                c[4].setMono(n1, oct, false, false);
-                c[8].setMono(n1, oct, true, false);  c[10].setMono(n1, (uint8_t)(oct + 1), false, true);
-                c[12].setMono(n1, oct, false, false);
+                put(bar + 0, n1, oct, true, false);  put(bar + 2, n1, (uint8_t)(oct + 1), false, true);
+                put(bar + 4, n1, oct, false, false);
+                put(bar + 8, n1, oct, true, false);  put(bar + 10, n1, (uint8_t)(oct + 1), false, true);
+                put(bar + 12, n1, oct, false, false);
                 break;
         }
     }
@@ -128,12 +139,8 @@ void writeBass(uint8_t pattern, uint8_t mode) {
 static void writeDrums(Pattern& p, const StyleDef& s) {
     uint8_t len = patLen(p);
     for (int st = 0; st < len; st++) {
-        uint8_t m = 0, a = 0;
-        for (int l = 0; l < 6; l++) {
-            if (s.steps[l]  & (1u << (st % STEPS_PER_BAR))) m |= (1 << l);
-            if (s.accent[l] & (1u << (st % STEPS_PER_BAR))) a |= (1 << l);
-        }
-        p.drums[st] = m; p.drumAcc[st] = a;
+        uint8_t m, a; styleStep(s, st, &m, &a);
+        patSetDrums(p, (uint8_t)st, m, a);
     }
 }
 
@@ -166,9 +173,9 @@ void filtreDefaults() {
 // The FILTRE miniature: closed filter -> bass in -> wide open -> back down.
 bool loadDemoPattern() {
     engineLock();
-    for (int p = 0; p < 4; p++) { g_patterns[p].length = STEPS_PER_BAR; clearPattern(p); }
+    for (int p = 0; p < 4; p++) { clearPattern(p); setPatternLength(p, STEPS_PER_BAR); }
     filtreDefaults();
-    for (int p = 1; p < 4; p++) g_patterns[p] = g_patterns[0];
+    for (int p = 1; p < 4; p++) pastePattern(0, p);
 
     // factory loop on deck A, bar-locked
     if (!deckLoaded(0)) {
@@ -183,7 +190,8 @@ bool loadDemoPattern() {
     writeBass(1, BASS_OCTAVE);
     writeBass(2, BASS_OCTAVE);
     // pattern 3 opens up: 16th hats
-    for (int st = 0; st < STEPS_PER_BAR; st++) g_patterns[2].drums[st] |= (1 << L_CHAT);
+    for (int st = 0; st < STEPS_PER_BAR; st++)
+        patSetDrums(g_patterns[2], (uint8_t)st, patDrums(g_patterns[2], st) | (1 << L_CHAT), patDrumAcc(g_patterns[2], st));
 
     for (int i = 0; i < SONG_LENGTH; i++) songClearSlot(i);
     g_song[0] = { 0, 2, MUTE_LANE(0), 50 };      // filter nearly shut, no kick (it still pumps)
