@@ -210,6 +210,7 @@ bool storageSaveProject(uint8_t slot) {
     SD.remove(path);
     File f = SD.open(path, FILE_WRITE);
     bool ok = false;
+    int ftype = -1;
     if (f) {
         ok = f.write((uint8_t*)pf, V6_HEAD) == V6_HEAD &&
              f.write(hi, SONG_LENGTH) == SONG_LENGTH;
@@ -460,8 +461,11 @@ bool storageLoadProject(uint8_t slot) {
 // One record per line. The device reads three kinds and skips everything else
 // (the tool keeps its own notes in the same file):
 //   BPM <n>                             tempo
+//   FILTER <LP|HP|BP|PHASER>            the filter's type (no such line = as it is)
 //   P <pattern 1..64> <bars 1..4>       that pattern's length
-//   S <pattern> <repeats> <mutes, hex>  the next song slot; bit 0 = T1 .. bit 12 = D8
+//   S <pattern> <repeats> <mutes, hex> [<filter 0..254>]
+//                                       the next song slot; mute bit 0 = T1 .. bit 12 = D8;
+//                                       the filter target is optional (none = left alone)
 int storageLoadArrangement(const char* filename) {
     char path[sizeof(DIR_SONGS) + LOOP_NAME_LEN + 2];
     snprintf(path, sizeof(path), "%s/%s", DIR_SONGS, filename);
@@ -471,7 +475,7 @@ int storageLoadArrangement(const char* filename) {
     SongSlot slots[SONG_LENGTH];
     uint8_t  bars[NUM_PATTERNS];
     memset(bars, 0, sizeof(bars));
-    int n = 0, bpm = 0, lineNo = 0;
+    int n = 0, bpm = 0, lineNo = 0, type = -1;
     bool ok = true;
     char line[48];
     while (ok && f.available()) {
@@ -481,15 +485,18 @@ int storageLoadArrangement(const char* filename) {
         line[len] = 0;
         if (!len) continue;
         if (lineNo++ == 0) { ok = strncmp(line, "FILTRE-ARR", 10) == 0; continue; }
-        unsigned a = 0, b = 0, m = 0; float t = 0;
+        unsigned a = 0, b = 0, m = 0, cut = 0; float t = 0; int got; char w[8];
         if (sscanf(line, "BPM %f", &t) == 1) bpm = (int)(t + 0.5f);
-        else if (sscanf(line, "P %u %u", &a, &b) == 2) {
+        else if (sscanf(line, "FILTER %7s", w) == 1) {
+            static const char* const k_types[FLT_COUNT] = { "LP", "HP", "BP", "PHASER" };
+            for (int i = 0; i < FLT_COUNT; i++) if (!strcmp(w, k_types[i])) type = i;
+        } else if (sscanf(line, "P %u %u", &a, &b) == 2) {
             if (a >= 1 && a <= NUM_PATTERNS && b >= 1 && b <= MAX_BARS) bars[a - 1] = (uint8_t)b;
-        } else if (sscanf(line, "S %u %u %x", &a, &b, &m) == 3) {
+        } else if ((got = sscanf(line, "S %u %u %x %u", &a, &b, &m, &cut)) >= 3) {
             if (a < 1 || a > NUM_PATTERNS || b < 1) continue;
             if (n < SONG_LENGTH)
                 slots[n++] = { (uint8_t)(a - 1), (uint8_t)(b > MAX_REPEATS ? MAX_REPEATS : b),
-                               (uint16_t)(m & MUTE_MASK), TARGET_NONE, 0 };
+                               (uint16_t)(m & MUTE_MASK), (uint8_t)((got == 4 && cut < TARGET_NONE) ? cut : TARGET_NONE), 0 };
         }
     }
     f.close();
@@ -497,6 +504,7 @@ int storageLoadArrangement(const char* filename) {
 
     engineLock();
     if (bpm >= 40 && bpm <= 300) g_bpm = (uint16_t)bpm;
+    if (type >= 0) g_fx.type = (uint8_t)type;
     for (int p = 0; p < NUM_PATTERNS; p++)
         if (bars[p]) setPatternLength((uint8_t)p, (uint8_t)(bars[p] * STEPS_PER_BAR));   // growing repeats the bars it has
     for (int i = 0; i < SONG_LENGTH; i++) { if (i < n) g_song[i] = slots[i]; else songClearSlot(i); }

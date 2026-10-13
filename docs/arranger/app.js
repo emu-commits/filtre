@@ -3,7 +3,7 @@
 // pattern and the parts that are silent, save the song. The model lives in
 // arr.js and the bar-line detection in beat.js; this file is glue and DOM.
 import { analyse, monoMix } from './beat.js';
-import { NUM_PATTERNS, MAX_BARS, SONG_LENGTH, ROWS, ROW_KEYS, MUTE_MASK,
+import { NUM_PATTERNS, MAX_BARS, SONG_LENGTH, ROWS, ROW_KEYS, MUTE_MASK, CUT_MAX, cutOf, cutPct, FILTERS,
          newDoc, patBars, build, place, serialize, parse, resize, muteNames } from './arr.js';
 
 const $ = id => document.getElementById(id);
@@ -33,14 +33,14 @@ function measureCount() {
 
 // ---------- changes ----------
 function snapshot() {
-  undo.push(JSON.stringify({ m: doc.measures, p: doc.patterns, bpm: doc.bpm, d: doc.downbeat }));
+  undo.push(JSON.stringify({ m: doc.measures, p: doc.patterns, bpm: doc.bpm, d: doc.downbeat, f: doc.filter }));
   if (undo.length > 200) undo.shift();
 }
 function undoLast() {
   const s = undo.pop();
   if (!s) return;
   const o = JSON.parse(s);
-  doc.measures = o.m; doc.patterns = o.p; doc.bpm = o.bpm; doc.downbeat = o.d;
+  doc.measures = o.m; doc.patterns = o.p; doc.bpm = o.bpm; doc.downbeat = o.d; doc.filter = o.f || '';
   layout();
 }
 function save() {
@@ -83,10 +83,10 @@ function buildGrid() {
     el.className = 'm none';
     el.dataset.i = i;
     el.tabIndex = -1;
-    el.innerHTML = `<canvas height="40"></canvas><div class="head"></div><div class="num">${i + 1}</div><div class="pat"></div><div class="rows">${'<i></i>'.repeat(ROWS.length)}</div>`;
+    el.innerHTML = `<canvas height="40"></canvas><div class="head"></div><div class="num">${i + 1}</div><div class="pat"></div><div class="rows">${'<i></i>'.repeat(ROWS.length)}</div><div class="cut"><b></b></div>`;
     const dots = el.querySelectorAll('.rows i');
     dots.forEach((d, b) => d.style.setProperty('--pc', `var(${PART_COLOR[b]})`));
-    cells.push({ el, canvas: el.firstChild, head: el.children[1], pat: el.children[3], dots, drawn: '' });
+    cells.push({ el, canvas: el.firstChild, head: el.children[1], pat: el.children[3], dots, cut: el.querySelector('.cut b'), drawn: '' });
     frag.appendChild(el);
   }
   g.appendChild(frag);
@@ -118,6 +118,10 @@ function paintCell(i) {
   if (c.pat.innerHTML !== label) c.pat.innerHTML = label;
   c.el.style.setProperty('--c', m.pat ? patColor(m.pat) : 'var(--line2)');
   for (let b = 0; b < ROWS.length; b++) c.dots[b].className = (m.pat && !(m.mute & (1 << b))) ? 'on' : '';
+  // the filter row: how far open the cutoff is by the end of this section; no bar = not driven
+  const cut = cutOf(m), cw = cut < 0 ? '' : `${Math.max(4, cutPct(cut))}%`;
+  if (c.cut.style.width !== cw) c.cut.style.width = cw;
+  c.cut.parentNode.className = cut < 0 ? 'cut' : 'cut on';
   const tint = m.pat ? patColor(m.pat) : '';
   if (c.tint !== tint) { c.tint = tint; c.drawn = ''; queueWaves(); }
 }
@@ -250,7 +254,7 @@ function setPattern(p, picked) {
     while (end - r[0] + 1 < patBars(doc, p) && end + 1 < doc.measures.length && !doc.measures[end + 1].pat) end++;
     if (end - r[0] + 1 === patBars(doc, p)) sel = { a: r[0], b: end };
   }
-  eachSelected(m => { m.pat = p; if (!p) m.mute = 0; });
+  eachSelected(m => { m.pat = p; if (!p) { m.mute = 0; delete m.cut; } });
 }
 function stepPattern(dir) {
   const r = selRange();
@@ -265,6 +269,36 @@ function toggleMute(bit) {
   for (let i = r[0]; i <= r[1]; i++) { if (!doc.measures[i].pat) continue; any = true; if (!(doc.measures[i].mute & (1 << bit))) all = false; }
   if (!any) { say('Give the measure a pattern first.'); return; }
   eachSelected(m => { if (!m.pat) return; if (all) m.mute &= ~(1 << bit); else m.mute |= (1 << bit); });
+}
+// the filter row. v: 0..CUT_MAX, or -1 = the song leaves the filter alone here
+function setCut(v) {
+  const r = selRange();
+  if (!r) return;
+  let any = false;
+  for (let i = r[0]; i <= r[1]; i++) if (doc.measures[i].pat) any = true;
+  if (!any) { say('Give the measure a pattern first.'); return; }
+  eachSelected(m => { if (!m.pat) return; if (v < 0) delete m.cut; else m.cut = Math.max(0, Math.min(CUT_MAX, Math.round(v))); });
+}
+function selCut() {                // the target all selected measures share, -1 = none, -2 = mixed
+  const r = selRange();
+  let c = null;
+  if (r) for (let i = r[0]; i <= r[1]; i++) {
+    if (!doc.measures[i].pat) continue;
+    const v = cutOf(doc.measures[i]);
+    if (c === null) c = v; else if (c !== v) return -2;
+  }
+  return c === null ? -1 : c;
+}
+// e / u as on FILTRE's SONG page: 8 at a time, and below shut = no target
+function stepCut(dir) {
+  const c = selCut();
+  if (c < 0) setCut(dir > 0 ? Math.round(CUT_MAX / 2) : -1);
+  else if (c === 0 && dir < 0) setCut(-1);
+  else setCut(c + dir * 8);
+}
+// the project's filter type; '' = the file leaves it as it is on the device
+function setFilter(id) {
+  snapshot(); doc.filter = id; changed();
 }
 function setBars(n) {
   const p = selPattern();
@@ -302,13 +336,25 @@ function buildInspector() {
     doc.patterns[p] = Object.assign({ bars: 1 }, doc.patterns[p], { name: e.target.value.trim() });
     changed();
   });
+  $('cut').addEventListener('input', e => setCut(+e.target.value));
+  $('cut').addEventListener('change', e => e.target.blur());       // keys go back to the measures
+  $('cutNone').addEventListener('click', () => setCut(-1));
+  $('cutShut').addEventListener('click', () => setCut(0));
+  $('cutOpen').addEventListener('click', () => setCut(CUT_MAX));
+  for (const [id, label] of [['', 'As on FILTRE'], ...FILTERS]) {
+    const b = document.createElement('button');
+    b.textContent = label; b.dataset.f = id;
+    if (!id) b.title = 'The file says nothing about it: FILTRE keeps the type it has';
+    b.addEventListener('click', () => setFilter(id));
+    $('ftype').appendChild(b);
+  }
   $('allOn').addEventListener('click', () => eachSelected(m => { m.mute = 0; }));
   $('allOff').addEventListener('click', () => eachSelected(m => { if (m.pat) m.mute = MUTE_MASK; }));
   $('asPrev').addEventListener('click', () => {
     const r = selRange();
     if (!r || !r[0]) return;
     const src = doc.measures[r[0] - 1];
-    eachSelected(m => { m.pat = src.pat; m.mute = src.mute; });
+    eachSelected(m => { m.pat = src.pat; m.mute = src.mute; if (cutOf(src) >= 0) m.cut = src.cut; else delete m.cut; });
   });
   $('selRun').addEventListener('click', () => {
     const r = selRange();
@@ -340,6 +386,11 @@ function paintInspector() {
     if (document.activeElement !== $('patName')) $('patName').value = (doc.patterns[p] && doc.patterns[p].name) || '';
     $('patNote').textContent = `${uses} measure${uses === 1 ? '' : 's'} in this track. ${bars > 1 ? `It takes ${bars} measures each time it plays.` : 'Up to 4 bars; a longer pattern takes that many measures each time it plays.'}`;
   }
+  const cut = selCut();
+  if (document.activeElement !== $('cut')) $('cut').value = cut >= 0 ? cut : 0;
+  $('cut').classList.toggle('idle', cut < 0);
+  $('cutVal').textContent = cut === -2 ? 'mixed' : cut < 0 ? 'not driven' : `${cutPct(cut)}%`;
+  $('cutNone').className = cut === -1 ? 'quiet cur' : 'quiet';
   let on = 0, off = 0, n = 0;
   const partBtns = $('parts').children;
   for (let b = 0; b < ROWS.length; b++) {
@@ -353,6 +404,7 @@ function paintInspector() {
 
 // ---------- the song ----------
 function paintSong() {
+  for (const b of $('ftype').children) b.className = b.dataset.f === (doc.filter || '') ? 'cur' : '';
   const ul = $('issues'), ol = $('song');
   ul.textContent = ''; ol.textContent = '';
   for (const it of built.issues) {
@@ -368,8 +420,8 @@ function paintSong() {
     if (r && r[0] < s.at + len && r[1] >= s.at) li.className = 'cur';
     li.style.setProperty('--c', patColor(s.pat));
     const muted = muteNames(s.mute);
-    li.innerHTML = `<span class="n">${k + 1}</span><span class="p">P${s.pat}</span><span>x${s.reps}</span><span class="mu">${muted.length === ROWS.length ? 'all muted' : muted.length ? 'mute ' + muted.join(' ') : ''}</span>`;
-    li.title = `Measures ${s.at + 1}-${s.at + len}`;
+    li.innerHTML = `<span class="n">${k + 1}</span><span class="p">P${s.pat}</span><span>x${s.reps}</span><span class="f">${s.cut >= 0 ? 'f' + cutPct(s.cut) : ''}</span><span class="mu">${muted.length === ROWS.length ? 'all muted' : muted.length ? 'mute ' + muted.join(' ') : ''}</span>`;
+    li.title = `Measures ${s.at + 1}-${s.at + len}${s.cut >= 0 ? `, filter reaches ${cutPct(s.cut)}% at the end` : ''}`;
     li.addEventListener('click', () => select(s.at, s.at + len - 1, { scroll: true }));
     ol.appendChild(li);
   });
@@ -652,6 +704,8 @@ function wire() {
     if (k === 'Escape') { sel = null; changed(); return; }
     if (k === '[') return stepPattern(-1);
     if (k === ']') return stepPattern(1);
+    if (k === 'e' || k === 'E') return stepCut(-1);
+    if (k === 'u' || k === 'U') return stepCut(1);
     if (k === 'Delete' || k === 'Backspace') { e.preventDefault(); return setPattern(0); }
     const row = ROW_KEYS.indexOf(k);
     if (row >= 0) { e.preventDefault(); toggleMute(row); }
@@ -685,4 +739,4 @@ layout();
 requestAnimationFrame(tick);
 
 // for tools/arranger-test/ui.test.mjs
-window.__arranger = { get doc() { return doc; }, get built() { return built; }, select, setPattern, toggleMute, setBars, serialize: () => serialize(doc) };
+window.__arranger = { get doc() { return doc; }, get built() { return built; }, select, setPattern, toggleMute, setBars, setCut, setFilter, serialize: () => serialize(doc) };

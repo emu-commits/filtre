@@ -122,6 +122,26 @@ if (info.n >= 34) {
   await shot('6-four-bars');
 }
 
+// the filter row: keys as on FILTRE, the buttons, and it is in the saved file
+await page.locator('.m').nth(0).click(); await page.locator('.m').nth(7).click({ modifiers: ['Shift'] });
+await page.locator('#cutShut').click();
+await page.locator('.m').nth(8).click(); await page.locator('.m').nth(15).click({ modifiers: ['Shift'] });
+await page.locator('#cutOpen').click();
+await page.keyboard.press('e');                          // 254 - 8
+await page.locator('.m').nth(16).click();
+await page.keyboard.press('u');                          // from nothing: the middle
+const fl = await page.evaluate(() => ({ cuts: window.__arranger.built.slots.slice(0, 3).map(s => s.cut), text: window.__arranger.serialize() }));
+check(JSON.stringify(fl.cuts) === '[0,246,127]', `shut, nearly open, half (${fl.cuts})`);
+// (measure 1 lost its pattern in the bar-line step above, so the first section is 7 measures = x3)
+check(fl.text.includes('\nS 1 3 0020 0\nS 1 4 0000 246\nS 2 1 0001 127\n'), 'filter targets in the S lines');
+check(await page.locator('.m .cut.on').count() === 16 && await page.locator('#cutVal').textContent() === '50%', 'every driven measure shows its filter bar; the inspector reads 50%');
+await page.keyboard.press('e'); for (let i = 0; i < 20; i++) await page.keyboard.press('e');
+check(await page.evaluate(() => !('cut' in window.__arranger.doc.measures[16])) && await page.locator('#cutVal').textContent() === 'not driven', 'e below shut = not driven');
+await page.locator('#ftype button', { hasText: 'Phaser' }).click();
+check(await page.evaluate(() => window.__arranger.serialize().includes('\nFILTER PHASER\n')) && await page.locator('#ftype button.cur').textContent() === 'Phaser', 'the filter type is in the file');
+await page.locator('.m').nth(8).click();
+await shot('7-filter');
+
 check(errors.length === 0, 'no page errors: ' + errors.join(' / '));
 console.log(`${pass} passed, ${fail} failed`);
 await browser.close(); server.close();

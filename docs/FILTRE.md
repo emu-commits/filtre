@@ -137,8 +137,8 @@ the repaint.)
 ## Samples and memory
 
 The Cardputer-ADV has **no PSRAM**. One arena, sized at boot from the free heap
-(about 230 KB expected with this build, 256 KB at most; the boot screen shows
-the real figure), holds deck A, deck B and the drum one-shots. The SAMPLE
+(211 KB measured on a Cardputer-ADV with the lid, 256 KB at most; the boot
+screen shows the real figure), holds deck A, deck B and the drum one-shots. The SAMPLE
 page and the lid always show `A / B / OS / free`.
 
 **Pattern memory** is a second, fixed pool: 96 bars of 226 bytes (21.7 KB)
@@ -159,8 +159,8 @@ of the firmware when the arena is sized is 48 KB instead of 56 KB.
   mono or stereo, any sample rate. They are summed to mono, resampled to
   22.05 kHz, DC-removed and peak-normalised on load. MP3 is not supported.
 - A sample is stored 16-bit if it fits, otherwise as 8-bit µ-law (`LO-FI`,
-  half the memory, about the fidelity of an SP-1200). 230 KB is about
-  5.2 s at 16-bit or 10.4 s lo-fi, shared between both decks.
+  half the memory, about the fidelity of an SP-1200). 211 KB is about
+  4.8 s at 16-bit or 9.6 s lo-fi, shared between both decks.
 - A file longer than the free memory is **cut**, and says so (`CUT TO 6.2s`).
   START moves the window into the file for the next load.
 - File names up to 63 characters.
@@ -208,21 +208,23 @@ than this cannot open. Deck audio is referenced by file name, never embedded.
 `docs/arranger` is a static page (published at
 <https://emu-commits.github.io/filtre/arranger/>) that cuts a reference track
 into measures and lets you mark each with a pattern number and the muted
-rows. It saves a text file; `storageLoadArrangement` reads three kinds of
+rows. It saves a text file; `storageLoadArrangement` reads four kinds of
 line from it and skips the rest, which are the tool's own:
 
 ```
 FILTRE-ARR 1
 BPM 124                  tempo, rounded (the tool keeps the exact one in TEMPO)
+FILTER LP                the filter's type: LP, HP, BP or PHASER (left out = as it is)
 P 1 2 main loop          pattern 1 is 2 bars long, 1..4 (the name is for the tool)
-S 1 4 1FE0               next slot: pattern 1, 4 times, mutes in hex (bit 0 = T1 .. bit 12 = D8)
+S 1 4 1FE0 254           next slot: pattern 1, 4 times, mutes in hex (bit 0 = T1 .. bit 12 = D8),
+                         then the slot's filter target 0..254 (left out = no target)
 ```
 
 Repeats are worked out when the file is saved: a run of measures with the
 same pattern and mutes becomes one slot, its length divided by the pattern's
 length (runs longer than 16 repeats are split). Loading replaces the chain,
-sets those pattern lengths and the tempo, and leaves notes, sounds and
-pattern mutes alone. Tests: `node tools/arranger-test/arr.test.mjs`,
+sets those pattern lengths, the tempo and the filter type if the file names
+one, and leaves notes, sounds and pattern mutes alone. Tests: `node tools/arranger-test/arr.test.mjs`,
 `beat.test.mjs`, and `ui.test.mjs <track>` (headless Chromium).
 
 ## Build and flash

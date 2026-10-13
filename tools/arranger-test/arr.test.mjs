@@ -50,6 +50,26 @@ const fill = (doc, from, n, pat, mute = 0) => { for (let i = 0; i < n; i++) doc.
   check(back.patterns[64].bars === 4 && back.patterns[7].bars === 3 && JSON.stringify(back.measures) === JSON.stringify(d.measures), 'and it loads back the same');
   check(parse('FILTRE-ARR 1\nP 1 9\nP 65 2\nS 65 1 0\nS 1 1 0\n').patterns[1].bars === 1 && !parse('FILTRE-ARR 1\nP 65 2\nS 1 1 0\n').patterns[65], 'out-of-range bars and patterns are refused');
 }
+{ // the filter row: a target per section, in the S and M lines
+  const d = newDoc(); resize(d, 60);
+  fill(d, 1, 8, 1); fill(d, 9, 8, 1); fill(d, 17, 40, 2);
+  for (let i = 0; i < 8; i++) d.measures[i].cut = 40;          // shut-ish intro
+  for (let i = 16; i < 56; i++) d.measures[i].cut = 240;       // 40 bars opening up: 16 + 16 + 8
+  const b = build(d), t = serialize(d), back = parse(t);
+  check(b.slots.length === 5 && b.slots[0].cut === 40 && b.slots[1].cut === -1, `same pattern and mutes, different filter = two slots (${b.slots.map(s => s.cut)})`);
+  check(b.slots[2].cut === 120 && b.slots[3].cut === 200 && b.slots[4].cut === 240, `a sweep longer than 16 repeats stays one straight line (${b.slots.slice(2).map(s => s.cut)})`);
+  check(t.includes('\nS 1 8 0000 40\nS 1 8 0000\nS 2 16 0000 120\n') && t.includes('\nM 17 40 2 0000 240\n'), 'the file carries it, and nothing where the filter is not driven');
+  check(JSON.stringify(back.measures) === JSON.stringify(d.measures), 'and it loads back the same');
+  const hand = parse('FILTRE-ARR 1\nS 3 2 0001 254\nS 3 1 0 300\nS 3 1 0\n');
+  check(hand.measures[0].cut === 254 && hand.measures[1].cut === 254 && !('cut' in hand.measures[2]) && !('cut' in hand.measures[3]), 'a file without M lines: targets from the S lines, out of range dropped');
+}
+{ // the filter type: one line for the project, and no line when it is left to the device
+  const d = newDoc(); resize(d, 4); fill(d, 1, 4, 1);
+  check(!serialize(d).includes('\nFILTER ') && parse(serialize(d)).filter === '', 'no type chosen = no FILTER line');
+  d.filter = 'PHASER';
+  check(serialize(d).includes('\nBPM 120\nFILTER PHASER\n') && parse(serialize(d)).filter === 'PHASER', 'the type is in the file and loads back');
+  check(parse('FILTRE-ARR 1\nFILTER hp\nS 1 1 0\n').filter === 'HP' && parse('FILTRE-ARR 1\nFILTER NOTCH\nS 1 1 0\n').filter === '', 'any case; an unknown type is dropped');
+}
 { // tempo keeps its decimals for the grid; the device gets a whole number
   const d = newDoc(); d.bpm = 121.296; d.downbeat = 0.7301; d.name = 'x'; d.audio = 'a b.mp3'; resize(d, 4); fill(d, 1, 4, 1);
   const t = serialize(d), back = parse(t);

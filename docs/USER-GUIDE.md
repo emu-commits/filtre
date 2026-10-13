@@ -344,13 +344,17 @@ terms: <https://emu-commits.github.io/filtre/arranger/>
 1. Open the track there (MP3 or WAV; it stays on your computer). It finds the
    tempo and the bar lines and shows every measure.
 2. Give each measure a pattern number and mute the parts that are silent in
-   it. Say per pattern how long it is, 1 to 4 bars.
+   it. Say per pattern how long it is, 1 to 4 bars. The **Filter** slider
+   (keys `e` `u`, as on the SONG page) sets where the cutoff has got to by the
+   end of a section; leave it at *Not driven* to keep the filter in your hands.
+   **Filter type** (low pass, high pass, band pass, phaser) is one choice for
+   the whole project; *As on FILTRE* leaves the type the device has.
 3. **Save .arr** and copy the file to `/groovebox/songs/` on the card.
 4. On FILTRE: SONG page, tap `m`. Pick the file with `;` and `.`, hold `\`,
    and answer **LOAD …: You sure?** with `\` again.
 
 That replaces the song chain, sets the length of the patterns the file names
-and the tempo, and turns song mode on. It does not touch your notes, sounds,
+and the tempo (and the filter type, if you chose one), and turns song mode on. It does not touch your notes, sounds,
 decks or the patterns' own mutes, and nothing is written to the card until you
 save the project. From there the song is yours to change like any other.
 

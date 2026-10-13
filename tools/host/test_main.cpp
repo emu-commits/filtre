@@ -501,7 +501,7 @@ int main() {
         SD.mkdir(DIR_SONGS);
         { FILE* fp = fopen((dir + "/t.arr").c_str(), "w");
           fputs("FILTRE-ARR 1\r\nNAME a very long name that is longer than the line buffer of the device, on purpose\n"
-                "BPM 126.4\nP 1 2 main loop\nP 9 1\nP 40 2\n\nS 1 4 0\nS 9 16 1FFF\nS 1 2 0041\nS 77 1 0\nS 32 99 fffff\n"
+                "BPM 126.4\nFILTER HP\nP 1 2 main loop\nP 9 1\nP 40 2\n\nS 1 4 0 254\nS 9 16 1FFF\nS 1 2 0041 0\nS 77 1 0\nS 32 99 fffff 999\n"
                 "AUDIO track.mp3\nM 1 8 1 0\n", fp); fclose(fp); }
         { FILE* fp = fopen((dir + "/bad.arr").c_str(), "w"); fputs("hello\nS 1 1 0\n", fp); fclose(fp); }
         g_patterns[0].mute = MUTE_DECK(1); patSetDrums(g_patterns[0], 3, 5, 0); setPatternLength(8, NUM_STEPS);
@@ -510,7 +510,9 @@ int main() {
         CHECK(storageLoadArrangement("nope.arr") == -1, "a missing file is refused");
         int n = storageLoadArrangement("t.arr");
         CHECK(n == 4, "four slots (%d)", n);
-        CHECK(g_song[0].pattern == 0 && g_song[0].repeats == 4 && g_song[0].mute == 0 && g_song[0].target == TARGET_NONE, "slot 1");
+        CHECK(g_song[0].pattern == 0 && g_song[0].repeats == 4 && g_song[0].mute == 0 && g_song[0].target == 254, "slot 1, filter wide open by its end (%u)", g_song[0].target);
+        CHECK(g_song[1].target == TARGET_NONE && g_song[2].target == 0 && g_song[3].target == TARGET_NONE, "no filter value = left alone; 0 = shut; out of range = none (%u %u %u)", g_song[1].target, g_song[2].target, g_song[3].target);
+        CHECK(g_fx.type == FLT_HP, "the filter type the file names (%u)", g_fx.type);
         CHECK(g_song[1].pattern == 8 && g_song[1].repeats == 16 && g_song[1].mute == MUTE_MASK, "slot 2: all 13 rows muted (%04x)", g_song[1].mute);
         CHECK(g_song[2].mute == (MUTE_SYNTH(0) | MUTE_LANE(1)), "slot 3 mutes (%04x)", g_song[2].mute);
         CHECK(g_song[3].pattern == 31 && g_song[3].repeats == MAX_REPEATS && g_song[3].mute == MUTE_MASK, "out-of-range values are clamped, a bad pattern skipped");

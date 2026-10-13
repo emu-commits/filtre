@@ -90,13 +90,26 @@
           <button id="selRun" class="quiet" title="Select every neighbouring measure with this pattern and these mutes">Select whole section</button>
         </div>
       </div>
+      <div class="field">
+        <div class="lab">Filter <span id="cutVal" class="cutVal"></span> <span class="dim">the f row: where the cutoff has got to by the end of the section. Keys e u = as on FILTRE</span></div>
+        <div class="cutRow">
+          <input id="cut" type="range" min="0" max="254" step="1" value="0" aria-label="Filter cutoff at the end of the section">
+          <button id="cutShut" class="quiet" title="Shut by the end of the section">Shut</button>
+          <button id="cutOpen" class="quiet" title="Wide open by the end of the section">Open</button>
+          <button id="cutNone" class="quiet" title="The song leaves the filter where your hands put it">Not driven</button>
+        </div>
+      </div>
     </section>
 
     <section class="panel">
       <h2>The song FILTRE will get <span id="songCount" class="dim"></span></h2>
+      <div class="field">
+        <div class="lab">Filter type <span class="dim">one for the whole project</span></div>
+        <div id="ftype" class="seg ftype"></div>
+      </div>
       <ul id="issues" class="issues"></ul>
       <ol id="song" class="song"></ol>
-      <p class="hint">Save the .arr file to <code>/groovebox/songs/</code> on the SD card. On FILTRE: SONG page, <kbd>m</kbd>, pick it, hold <kbd>\</kbd>, press <kbd>\</kbd> again. It sets the song chain, the pattern lengths and the tempo. Your notes, sounds and the patterns' own mutes are not touched.</p>
+      <p class="hint">Save the .arr file to <code>/groovebox/songs/</code> on the SD card. On FILTRE: SONG page, <kbd>m</kbd>, pick it, hold <kbd>\</kbd>, press <kbd>\</kbd> again. It sets the song chain (with each slot's mutes and filter target), the pattern lengths, the tempo and, if you chose one, the filter type. Your notes, sounds and the patterns' own mutes are not touched.</p>
     </section>
   </aside>
 </div>

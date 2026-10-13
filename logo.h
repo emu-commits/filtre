@@ -14,8 +14,8 @@ struct LogoRect { uint8_t x, y, w, h; int8_t skew; };   // skew: units the botto
 // F I L T R E, x already advanced letter by letter (letters 14 wide, I 4, 4 between)
 static const LogoRect k_logo[] = {
     {  0, 0,  4, 20, 0 }, {  0, 0, 14, 4, 0 }, {  0,  8, 11, 4, 0 },                          // F
-    { 18, 0,  4, 20, 0 },                                                                    // I
-    { 26, 0,  4, 20, 0 }, { 26, 16, 13, 4, 0 },                                              // L
+    { 19, 0,  4, 20, 0 },                                                                    // I: a touch right, the F is open on that side
+    { 28, 0,  4, 20, 0 }, { 28, 16, 13, 4, 0 },                                              // L: closer to the T, whose bar overhangs it
     { 43, 0, 15,  4, 0 }, { 48, 0,  4, 20, 0 },                                              // T
     { 62, 0,  4, 20, 0 }, { 62, 0, 12, 4, 0 }, { 62,  8, 12, 4, 0 }, { 72, 2, 4, 8, 0 },     // R: stem, bowl
     { 68, 12, 4,  8, 4 },                                                                    //    leg
