@@ -95,8 +95,8 @@ kbd, code { background: #000; border: 1px solid var(--line); border-radius: 3px;
 .m.now .head { display: block; }
 .m.sectionStart::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 2px; background: var(--text); opacity: .55; }
 
-.side { min-width: 0; position: sticky; top: 8px; display: grid; gap: 12px; max-height: calc(100vh - 16px); overflow: auto; }
-.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 12px; }
+.side { min-width: 0; grid-template-columns: minmax(0, 1fr); position: sticky; top: 8px; display: grid; gap: 12px; max-height: calc(100vh - 16px); overflow: auto; }
+.panel { min-width: 0; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 12px; }
 .panel h2 { font-weight: 700; margin-bottom: 8px; }
 .field { margin-top: 10px; }
 .field .lab { color: var(--text); margin-bottom: 5px; }
@@ -130,8 +130,8 @@ kbd, code { background: #000; border: 1px solid var(--line); border-radius: 3px;
 .cutRow button { padding: 5px 8px; }
 .cutRow button.cur { color: var(--text); border-color: var(--line2); }
 .cutVal { color: var(--amber); font-weight: 700; }
-.ftype { display: flex; }
-.ftype button { flex: 1; padding: 5px 4px; }
+.ftype { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 3px; }
+.ftype button { min-width: 0; margin: 0 !important; padding: 5px 2px; border-radius: 4px !important; }
 .partBtns { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 #inspector.idle .field { opacity: .45; pointer-events: none; }
 
